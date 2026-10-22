@@ -4,7 +4,11 @@
 set -euo pipefail
 
 out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
-skip() { echo "$1"; out run false; exit 0; }
+skip() {
+  echo "$1"
+  out run false
+  exit 0
+}
 event() { jq -r "$1" "$GITHUB_EVENT_PATH"; }
 
 case "$GITHUB_EVENT_NAME" in
@@ -13,20 +17,21 @@ case "$GITHUB_EVENT_NAME" in
 
     first_line="$(event '.comment.body' | head -n1 | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
     case "$first_line" in
-      "$TRIGGER_PHRASE"|"$TRIGGER_PHRASE "*) ;;
+      "$TRIGGER_PHRASE" | "$TRIGGER_PHRASE "*) ;;
       *) skip "Comment does not start with $TRIGGER_PHRASE. Skipping." ;;
     esac
 
     assoc="$(event '.comment.author_association')"
     if [[ ",$ALLOWED_ASSOCIATIONS," != *",$assoc,"* ]]; then
       echo "::warning::$(event '.comment.user.login') ($assoc) is not allowed to trigger a review."
-      out run false; exit 0
+      out run false
+      exit 0
     fi
 
     pr="$(event '.issue.number')"
     # Acknowledge the request on the comment. Best effort only.
     gh api -X POST "repos/$GITHUB_REPOSITORY/issues/comments/$(event '.comment.id')/reactions" \
-      -f content=eyes >/dev/null 2>&1 || true
+      -f content=eyes > /dev/null 2>&1 || true
     ;;
   pull_request)
     pr="$(event '.pull_request.number')"
@@ -42,9 +47,9 @@ case "$GITHUB_EVENT_NAME" in
 esac
 
 pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr")"
-[ "$(jq -r '.state' <<<"$pr_json")" = "open" ] || skip "PR #$pr is not open. Skipping."
-base_ref="$(jq -r '.base.ref' <<<"$pr_json")"
-api_head_sha="$(jq -r '.head.sha' <<<"$pr_json")"
+[ "$(jq -r '.state' <<< "$pr_json")" = "open" ] || skip "PR #$pr is not open. Skipping."
+base_ref="$(jq -r '.base.ref' <<< "$pr_json")"
+api_head_sha="$(jq -r '.head.sha' <<< "$pr_json")"
 
 # Open the check first, so the PR shows "In progress" right away.
 run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
@@ -56,8 +61,11 @@ check_id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" \
   --jq '.id')"
 out check-run-id "$check_id"
 
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
-  || { echo "::error::No git checkout found. Add actions/checkout before this action."; exit 1; }
+git rev-parse --is-inside-work-tree > /dev/null 2>&1 \
+  || {
+    echo "::error::No git checkout found. Add actions/checkout before this action."
+    exit 1
+  }
 
 # CI checkouts are shallow by default, which breaks merge-base. Fix it here.
 if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then

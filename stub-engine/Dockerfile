@@ -10,4 +10,9 @@ COPY review.sh /usr/local/bin/review.sh
 # Point HOME somewhere writable so git and curl do not trip over it.
 ENV HOME=/tmp
 
+# The action overrides this with --user at runtime; the default just keeps
+# standalone runs off root. Numeric so hosts without the name can resolve it
+# (65534 is nobody).
+USER 65534:65534
+
 ENTRYPOINT ["bash", "/usr/local/bin/review.sh"]

@@ -1,0 +1,19 @@
+# shfmt reads these settings, so a bare `shfmt -d .` matches CI and this file
+# stays the single source of truth for shell formatting.
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+
+[*.sh]
+indent_style = space
+indent_size = 2
+switch_case_indent = true
+space_redirects = true
+binary_next_line = true
+
+[*.{yml,yaml,md,json}]
+indent_style = space
+indent_size = 2

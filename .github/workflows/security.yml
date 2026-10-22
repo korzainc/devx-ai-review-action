@@ -1,0 +1,120 @@
+# Korza CI Base Checks: secrets (Kingfisher), SAST (Semgrep), dependency and
+# IaC scanning (Trivy), Dockerfile lint (hadolint), and image scan of the stub
+# engine. Follows the ci-common full example:
+# https://github.com/korzainc/shared-workflows/blob/main/images/ci-common/README.md#full-example
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {} # trigger a main-push-equivalent run on demand
+  schedule:
+    - cron: "30 5 * * *" # daily full sweep; iac-config rules update independently
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write # the sticky PR comment
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI_COMMON_IMAGE: ghcr.io/korzainc/ci-common:0.4.0@sha256:8624b45376876d905d09d176a77578add5a923df4f8982f1917ec7e3b7a16af3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # secrets/sast/sca need real history to diff against on a pr run
+          persist-credentials: false # ci-run needs local history, not credentials
+
+      # No dependency install step: this repo is shell plus one Dockerfile, with
+      # no package manifests or lockfiles.
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ci-scratch/trivy-db
+          key: trivy-db-${{ github.run_id }} # unique per run, so a save always happens
+          restore-keys: trivy-db- # prefix match still restores the last run's DB
+
+      # image-scan scans an already-built reference; it never builds one itself.
+      # This if:, not image-scan's self-gate, is what keeps a pr run from scanning anything.
+      - name: Build stub engine image
+        if: github.event_name != 'pull_request'
+        run: docker build -t "ai-review-stub:$GITHUB_SHA" stub-engine/
+
+      # All *_BLOCKING flags start false. Flip one to true once its findings
+      # have been reviewed on real runs.
+      - name: ci-run scan
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Empty infers main-push from the missing base/head sha; only a
+          # schedule run needs the override.
+          CI_RUN_MODE: ${{ github.event_name == 'schedule' && 'scheduled' || '' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci-out" "$RUNNER_TEMP/ci-scratch"
+          docker run --rm \
+            -v "$PWD:$PWD" -w "$PWD" \
+            -v "$RUNNER_TEMP/ci-out:/out" \
+            -v "$RUNNER_TEMP/ci-scratch:/scratch" \
+            -e CI=true -e CI_SCRATCH_DIR=/scratch -e CI_RUN_MODE \
+            -e TRIVY_CACHE_DIR=/scratch/trivy-db \
+            -e CI_SCA_BLOCKING=false -e CI_IAC_CONFIG_BLOCKING=false -e CI_IAC_DOCKERFILE_BLOCKING=false \
+            -e GITHUB_STEP_SUMMARY=/step-summary \
+            -v "$GITHUB_STEP_SUMMARY:/step-summary" \
+            "$CI_COMMON_IMAGE" \
+            ci-run scan --out /out --repo-root "$PWD" --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
+
+      - name: ci-run image-scan
+        if: ${{ !cancelled() }} # a blocking finding in scan must not skip this
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Empty on a pr run, matching the build step's if: above, so
+          # image-scan's self-skip stays quiet about a ref that was never built.
+          IMAGE_SCAN_REF: ${{ github.event_name != 'pull_request' && format('ai-review-stub:{0}', github.sha) || '' }}
+        run: |
+          docker run --rm \
+            --group-add "$(stat -c '%g' /var/run/docker.sock)" \
+            -v /var/run/docker.sock:/var/run/docker.sock:ro \
+            -v "$PWD:$PWD" -w "$PWD" \
+            -v "$RUNNER_TEMP/ci-out:/out" \
+            -v "$RUNNER_TEMP/ci-scratch:/scratch" \
+            -e CI=true -e CI_SCRATCH_DIR=/scratch \
+            -e TRIVY_CACHE_DIR=/scratch/trivy-db \
+            -e CI_IMAGE_SCAN_REF="$IMAGE_SCAN_REF" \
+            -e CI_IMAGE_SCAN_BLOCKING=false \
+            "$CI_COMMON_IMAGE" \
+            ci-run image-scan --out /out --repo-root "$PWD" --image-label stub-engine \
+              --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA"
+
+      - name: ci-run report
+        if: always() # still post annotations and the combined verdict on failure
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # --expect-image-labels=stub-engine matches image-scan's label above,
+          # so a skipped or crashed image-scan fails the gate closed.
+          docker run --rm \
+            -v "$RUNNER_TEMP/ci-out:/out" \
+            -v "$GITHUB_EVENT_PATH:/event.json:ro" \
+            -e GITHUB_TOKEN \
+            -e GITHUB_ACTIONS=true -e GITHUB_EVENT_NAME \
+            -e GITHUB_EVENT_PATH=/event.json -e GITHUB_REPOSITORY \
+            -e GITHUB_SHA -e GITHUB_API_URL -e GITHUB_SERVER_URL -e GITHUB_RUN_ID \
+            -e GITHUB_STEP_SUMMARY=/step-summary \
+            -v "$GITHUB_STEP_SUMMARY:/step-summary" \
+            "$CI_COMMON_IMAGE" \
+            ci-run report --in /out --event-file /event.json --expect-image-labels=stub-engine
+
+      - name: Upload SBOM
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom
+          path: |
+            ${{ runner.temp }}/ci-scratch/ci-common/sca.sbom.cdx.json
+            ${{ runner.temp }}/ci-scratch/ci-common/sca.sbom.spdx.json
+          if-no-files-found: warn

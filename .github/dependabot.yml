@@ -1,0 +1,20 @@
+# Keeps the stub engine base image and every pinned action current.
+# Dependabot updates SHA-pinned actions and keeps their version comments.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: /stub-engine
+    schedule:
+      interval: weekly
+    # Let a new release age before adopting it, so a hijacked upstream gets
+    # caught before it lands here.
+    cooldown:
+      default-days: 7
+
+  # Covers .github/workflows and the composite steps in action.yml.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
