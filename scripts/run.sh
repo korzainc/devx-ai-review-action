@@ -32,7 +32,10 @@ if [ ! -s "$result" ]; then
   out verdict error
   msg="Engine exited with $engine_exit and produced no result."
   printf '%s\n' "$msg" > "$out_dir/summary.md"
-  if [ "$FAIL_ON_ERROR" = "true" ]; then echo "::error::$msg"; exit 1; fi
+  if [ "$FAIL_ON_ERROR" = "true" ]; then
+    echo "::error::$msg"
+    exit 1
+  fi
   echo "::warning::$msg The check reports neutral (fail-on-error is false)."
   exit 0
 fi
@@ -59,9 +62,15 @@ cat "$out_dir/summary.md" >> "$GITHUB_STEP_SUMMARY"
 
 case "$verdict" in
   pass) exit 0 ;;
-  fail) echo "::error::AI Code Review failed: $(jq -r '.verdict.reason' "$result")"; exit 1 ;;
+  fail)
+    echo "::error::AI Code Review failed: $(jq -r '.verdict.reason' "$result")"
+    exit 1
+    ;;
   *)
-    if [ "$FAIL_ON_ERROR" = "true" ]; then echo "::error::AI Code Review ended with verdict: $verdict"; exit 1; fi
+    if [ "$FAIL_ON_ERROR" = "true" ]; then
+      echo "::error::AI Code Review ended with verdict: $verdict"
+      exit 1
+    fi
     echo "::warning::AI Code Review ended with verdict: $verdict. The check reports neutral."
     exit 0
     ;;

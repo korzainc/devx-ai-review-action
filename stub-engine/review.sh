@@ -17,7 +17,10 @@ OUT_DIR="${REVIEW_OUTPUT_DIR:-/github/out}"
 mode=advisory
 for m in blocking clean error crash sleep; do
   case ",${REVIEW_SKILLS:-}," in
-    *,"$m",*) mode="$m"; break ;;
+    *,"$m",*)
+      mode="$m"
+      break
+      ;;
   esac
 done
 echo "Stub engine: mode=$mode PR=#${PR_NUMBER:-?} ${BASE_SHA:0:7}..${HEAD_SHA:0:7}"
@@ -72,16 +75,22 @@ if [ "$mode" = "clean" ]; then
   exit 0
 fi
 
-path1="${targets[0]%:*}"; line1="${targets[0]#"${path1}":}"
+path1="${targets[0]%:*}"
+line1="${targets[0]#"${path1}":}"
 t2="${targets[1]:-${targets[0]}}"
-path2="${t2%:*}"; line2="${t2#"${path2}":}"
+path2="${t2%:*}"
+line2="${t2#"${path2}":}"
 
 line1_text="$(git show "$HEAD_SHA:$path1" | sed -n "${line1}p")"
 
-enforcing=false; status=pass; blocking='[]'
+enforcing=false
+status=pass
+blocking='[]'
 reason="No blocking findings. 2 advisory findings."
 if [ "$mode" = "blocking" ]; then
-  enforcing=true; status=fail; blocking='["stub-0001"]'
+  enforcing=true
+  status=fail
+  blocking='["stub-0001"]'
   reason="1 blocking finding from the stub skill."
 fi
 
@@ -115,13 +124,13 @@ if [ -n "${GITHUB_TOKEN:-}" ] && [ -n "${PR_NUMBER:-}" ]; then
 $line1_text
 \`\`\`"
   if jq -n --arg body "$body" --arg commit_id "$HEAD_SHA" \
-       --arg path "$path1" --argjson line "$line1" \
-       '{body: $body, commit_id: $commit_id, path: $path, line: $line, side: "RIGHT"}' \
-     | curl -sS --fail-with-body -o /dev/null -X POST \
-         -H "Authorization: Bearer $GITHUB_TOKEN" \
-         -H "Accept: application/vnd.github+json" \
-         "${GITHUB_API_URL:-https://api.github.com}/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
-         --data-binary @-; then
+    --arg path "$path1" --argjson line "$line1" \
+    '{body: $body, commit_id: $commit_id, path: $path, line: $line, side: "RIGHT"}' \
+    | curl -sS --fail-with-body -o /dev/null -X POST \
+      -H "Authorization: Bearer $GITHUB_TOKEN" \
+      -H "Accept: application/vnd.github+json" \
+      "${GITHUB_API_URL:-https://api.github.com}/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" \
+      --data-binary @-; then
     echo "Posted a review comment on $path1:$line1."
   else
     echo "::warning::Could not post the review comment. Continuing."

@@ -8,10 +8,10 @@ result="$out_dir/result.json"
 summary_file="$out_dir/summary.md"
 
 case "$REVIEW_OUTCOME:$VERDICT" in
-  *:pass)      conclusion=success ;;
-  *:fail)      conclusion=failure ;;
+  *:pass) conclusion=success ;;
+  *:fail) conclusion=failure ;;
   cancelled:*) conclusion=cancelled ;;
-  *)           if [ "$FAIL_ON_ERROR" = "true" ]; then conclusion=failure; else conclusion=neutral; fi ;;
+  *) if [ "$FAIL_ON_ERROR" = "true" ]; then conclusion=failure; else conclusion=neutral; fi ;;
 esac
 
 if [ -s "$result" ] && { [ "$VERDICT" = "pass" ] || [ "$VERDICT" = "fail" ]; }; then
@@ -36,6 +36,6 @@ summary="${summary:0:60000}"
 jq -n --arg c "$conclusion" --arg t "$title" --arg s "$summary" \
   --arg u "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
   '{status:"completed",conclusion:$c,details_url:$u,output:{title:$t,summary:$s}}' \
-  | gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CHECK_RUN_ID" --input - >/dev/null
+  | gh api -X PATCH "repos/$GITHUB_REPOSITORY/check-runs/$CHECK_RUN_ID" --input - > /dev/null
 
 echo "Check run completed: $conclusion"
