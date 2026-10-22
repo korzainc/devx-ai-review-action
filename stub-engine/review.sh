@@ -9,7 +9,8 @@
 #   clean     no findings, verdict pass
 #   error     verdict error, as if the review could not complete
 #   crash     exit nonzero without writing result.json
-#   sleep     sleep REVIEW_TIMEOUT seconds first, to test cancellation
+#   sleep     hang well past REVIEW_TIMEOUT, to test cancellation and the
+#             action's timeout backstop
 set -euo pipefail
 
 OUT_DIR="${REVIEW_OUTPUT_DIR:-/github/out}"
@@ -30,9 +31,11 @@ if [ "$mode" = "crash" ]; then
   exit 2
 fi
 if [ "$mode" = "sleep" ]; then
-  echo "Sleeping ${REVIEW_TIMEOUT:-600}s so the run can be cancelled."
-  sleep "${REVIEW_TIMEOUT:-600}"
-  mode=advisory
+  # A real hung engine never respects its budget, so neither does this one.
+  hang=$((${REVIEW_TIMEOUT:-600} + 3600))
+  echo "Simulating a hung engine: sleeping ${hang}s, past the ${REVIEW_TIMEOUT:-600}s budget."
+  sleep "$hang"
+  exit 2
 fi
 
 provenance() {

@@ -8,8 +8,36 @@ out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 out_dir="$RUNNER_TEMP/korza-review"
 mkdir -p "$out_dir"
 
+# The review could not complete. Write the error everywhere it is read from,
+# then let fail-on-error decide whether that fails the step.
+engine_error() {
+  out verdict error
+  printf '%s\n' "$1" > "$out_dir/summary.md"
+  if [ "$FAIL_ON_ERROR" = "true" ]; then
+    echo "::error::$1"
+    exit 1
+  fi
+  echo "::warning::$1 The check reports neutral (fail-on-error is false)."
+  exit 0
+}
+
+case "$REVIEW_TIMEOUT" in
+  '' | *[!0-9]*)
+    echo "::warning::timeout-seconds '$REVIEW_TIMEOUT' is not a number. Using 600."
+    REVIEW_TIMEOUT=600
+    ;;
+esac
+
+# The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still
+# write a result) on its own; this wrapper is the backstop that keeps a hung
+# engine from holding the job, and the check, until the 6 hour job limit.
+# --init gives the container a PID 1 that actually dies on SIGTERM.
+hard_timeout=$((REVIEW_TIMEOUT + 30))
+cname="korza-review-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$$"
+
 set +e
-docker run --rm \
+timeout --signal=TERM --kill-after=20 "$hard_timeout" \
+  docker run --rm --init --name "$cname" \
   --user "$(id -u):$(id -g)" \
   -v "$GITHUB_WORKSPACE:/workspace:ro" \
   -v "$GITHUB_EVENT_PATH:/github/event.json:ro" \
@@ -26,18 +54,17 @@ docker run --rm \
   "$REVIEW_IMAGE"
 engine_exit=$?
 set -e
+# When the kill-after path fires, timeout kills the docker client and the
+# container outlives it. Make sure nothing is left running on the runner.
+docker rm -f "$cname" > /dev/null 2>&1 || true
 
 result="$out_dir/result.json"
 if [ ! -s "$result" ]; then
-  out verdict error
-  msg="Engine exited with $engine_exit and produced no result."
-  printf '%s\n' "$msg" > "$out_dir/summary.md"
-  if [ "$FAIL_ON_ERROR" = "true" ]; then
-    echo "::error::$msg"
-    exit 1
+  # 124: timeout sent TERM and the container exited. 137: the KILL fallback.
+  if [ "$engine_exit" -eq 124 ] || [ "$engine_exit" -eq 137 ]; then
+    engine_error "Engine timed out: no result after ${hard_timeout}s (timeout-seconds $REVIEW_TIMEOUT plus 30s grace)."
   fi
-  echo "::warning::$msg The check reports neutral (fail-on-error is false)."
-  exit 0
+  engine_error "Engine exited with $engine_exit and produced no result."
 fi
 
 verdict="$(jq -r '.verdict.status' "$result")"

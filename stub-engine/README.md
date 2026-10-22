@@ -22,7 +22,7 @@ What it does:
 | `clean` | no findings, verdict pass |
 | `error` | verdict error |
 | `crash` | exits 2 with no result.json |
-| `sleep` | sleeps REVIEW_TIMEOUT seconds, then advisory |
+| `sleep` | hangs well past REVIEW_TIMEOUT, to test cancellation and the timeout backstop |
 
 Build and try locally:
 

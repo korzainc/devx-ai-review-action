@@ -51,7 +51,9 @@ inputs:
     required: false
     default: "false"
   timeout-seconds:
-    description: Hard time budget for the engine.
+    description: >
+      Hard time budget for the engine. The engine is told this number; the action
+      kills the container 30 seconds after it, and the check reports per fail-on-error.
     required: false
     default: "600"
   upload-sarif:
