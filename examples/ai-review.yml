@@ -6,6 +6,7 @@ on:
   issue_comment:
     types: [created]
   pull_request:          # add once a skill blocks merges, so the gate cannot be skipped
+    types: [opened, synchronize, reopened, ready_for_review]  # ready_for_review: the hint
 
 permissions:
   contents: read
@@ -18,10 +19,13 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Tells the author how to ask for a review, once, when the PR is opened.
+  # Tells the author how to ask for a review, once per PR.
   hint:
+    # Once per PR, when it is ready for review: opened as non-draft, or a draft marked ready.
     if: >-
-      github.event_name == 'pull_request' && github.event.action == 'opened' &&
+      github.event_name == 'pull_request' &&
+      ((github.event.action == 'opened' && !github.event.pull_request.draft) ||
+       github.event.action == 'ready_for_review') &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
