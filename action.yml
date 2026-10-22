@@ -1,0 +1,140 @@
+name: Korza AI Code Review
+description: On-demand AI code review that reports a pass/fail check on the pull request.
+author: Korza
+branding:
+  icon: eye
+  color: purple
+
+inputs:
+  anthropic-api-key:
+    description: Anthropic API key for the review. Always pass it from a secret.
+    required: true
+  github-token:
+    description: Token used to read the PR and post the check run and review comments.
+    required: false
+    default: ${{ github.token }}
+  registry-token:
+    description: >
+      Token used to pull the private engine image from GHCR. The default works for
+      korzainc repos that have been granted read access to the package. Repos in
+      other orgs must pass a read:packages token here.
+    required: false
+    default: ${{ github.token }}
+  registry-username:
+    description: Username for the GHCR login. Set it to the token owner when registry-token is a PAT.
+    required: false
+    default: ${{ github.actor }}
+  config:
+    description: Path to the review config in the consuming repo.
+    required: false
+    default: .korza/review.yml
+  skills:
+    description: Comma-separated skills to run. Empty runs every skill the config enables.
+    required: false
+    default: ""
+  trigger-phrase:
+    description: Comment text that starts a review on issue_comment events.
+    required: false
+    default: /review
+  allowed-associations:
+    description: Who may trigger a review by comment, as GitHub author associations.
+    required: false
+    default: OWNER,MEMBER,COLLABORATOR
+  check-name:
+    description: Name of the check run on the PR. Require this name in branch protection.
+    required: false
+    default: AI Code Review
+  fail-on-error:
+    description: >
+      What the check reports when the review cannot complete (outage, timeout, crash).
+      false reports neutral, which does not block merges. true reports failure.
+    required: false
+    default: "false"
+  timeout-seconds:
+    description: Hard time budget for the engine.
+    required: false
+    default: "600"
+  upload-sarif:
+    description: Also upload findings to GitHub code scanning (needs security-events write).
+    required: false
+    default: "false"
+  image:
+    description: Engine image, pinned by digest per release. Override only for testing.
+    required: false
+    default: ghcr.io/korzainc/ai-review@sha256:REPLACE_WITH_RELEASE_DIGEST
+
+outputs:
+  verdict:
+    description: pass, fail, error, or skipped.
+    value: ${{ steps.review.outputs.verdict || 'skipped' }}
+  findings:
+    description: Number of findings reported.
+    value: ${{ steps.review.outputs.findings }}
+  sarif-file:
+    description: Path to the SARIF file on the runner.
+    value: ${{ steps.review.outputs.sarif-file }}
+  check-run-id:
+    description: ID of the check run created on the PR head commit.
+    value: ${{ steps.prep.outputs.check-run-id }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare
+      id: prep
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
+        ALLOWED_ASSOCIATIONS: ${{ inputs.allowed-associations }}
+        CHECK_NAME: ${{ inputs.check-name }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/prepare.sh"
+
+    - name: Log in to GHCR
+      if: steps.prep.outputs.run == 'true'
+      shell: bash
+      env:
+        REGISTRY_TOKEN: ${{ inputs.registry-token }}
+        REGISTRY_USERNAME: ${{ inputs.registry-username }}
+      run: printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USERNAME" --password-stdin
+
+    - name: Review
+      id: review
+      if: steps.prep.outputs.run == 'true'
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        REVIEW_IMAGE: ${{ inputs.image }}
+        REVIEW_CONFIG: ${{ inputs.config }}
+        REVIEW_SKILLS: ${{ inputs.skills }}
+        REVIEW_TIMEOUT: ${{ inputs.timeout-seconds }}
+        FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        PR_NUMBER: ${{ steps.prep.outputs.pr-number }}
+        BASE_SHA: ${{ steps.prep.outputs.base-sha }}
+        HEAD_SHA: ${{ steps.prep.outputs.head-sha }}
+        CHECK_RUN_ID: ${{ steps.prep.outputs.check-run-id }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/run.sh"
+
+    - name: Complete check
+      if: always() && steps.prep.outputs.check-run-id != ''
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        CHECK_RUN_ID: ${{ steps.prep.outputs.check-run-id }}
+        REVIEW_OUTCOME: ${{ steps.review.outcome }}
+        VERDICT: ${{ steps.review.outputs.verdict }}
+        FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/finalize.sh"
+
+    - name: Log out of GHCR
+      if: always() && steps.prep.outputs.run == 'true'
+      shell: bash
+      run: docker logout ghcr.io >/dev/null 2>&1 || true
+
+    - name: Upload SARIF
+      if: always() && inputs.upload-sarif == 'true' && steps.review.outputs.sarif-file != ''
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ steps.review.outputs.sarif-file }}
+        category: korza-ai-review

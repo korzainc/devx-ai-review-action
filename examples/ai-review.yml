@@ -1,0 +1,33 @@
+# Drop into the consuming repo at .github/workflows/ai-review.yml and merge it to
+# the default branch. GitHub only runs issue_comment workflows from there.
+name: AI Code Review
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:          # add once a skill blocks merges, so the gate cannot be skipped
+
+permissions:
+  contents: read
+  pull-requests: write   # review comments and the eyes reaction
+  checks: write          # the pass/fail check on the PR head commit
+  packages: read         # pull the engine image with GITHUB_TOKEN (korzainc repos)
+
+concurrency:
+  group: ai-review-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'pull_request' ||
+      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/review'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: korzainc/devx-ai-review-action@v1
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Repos outside korzainc also need:
+          # registry-token: ${{ secrets.KORZA_REGISTRY_TOKEN }}
+          # registry-username: korza-registry-bot
