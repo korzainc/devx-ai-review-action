@@ -24,7 +24,12 @@ jobs:
       (github.event.issue.pull_request && startsWith(github.event.comment.body, '/review'))
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The v1 tag is the supported way to consume this action: it moves with
+      # releases on purpose. Pin a digest-tagged release instead if your org
+      # requires immutable refs.
+      # Semgrep flags this tag as mutable. That is deliberate: v1 moves with
+      # releases and is the supported way to consume this action.
       - uses: korzainc/devx-ai-review-action@v1
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
