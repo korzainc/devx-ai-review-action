@@ -44,7 +44,8 @@ provenance() {
 
 if [ "$mode" = "error" ]; then
   jq -n --argjson prov "$(provenance)" \
-    '{verdict: {status: "error", reason: "Stub simulated an engine error.", blocking_findings: []},
+    '{contract_version: 1,
+      verdict: {status: "error", reason: "Stub simulated an engine error.", blocking_findings: []},
       findings: [], skills_run: ["stub"], provenance: $prov}' > "$OUT_DIR/result.json"
   exit 0
 fi
@@ -72,7 +73,8 @@ fi
 
 if [ "$mode" = "clean" ]; then
   jq -n --argjson prov "$(provenance)" \
-    '{verdict: {status: "pass", reason: "No findings.", blocking_findings: []},
+    '{contract_version: 1,
+      verdict: {status: "pass", reason: "No findings.", blocking_findings: []},
       findings: [], skills_run: ["stub"], provenance: $prov}' > "$OUT_DIR/result.json"
   echo "Result written: pass, 0 findings."
   exit 0
@@ -103,7 +105,8 @@ jq -n \
   --arg path1 "$path1" --argjson line1 "$line1" --arg sugg "$line1_text" \
   --arg path2 "$path2" --argjson line2 "$line2" \
   --argjson prov "$(provenance)" \
-  '{verdict: {status: $status, reason: $reason, blocking_findings: $blocking},
+  '{contract_version: 1,
+    verdict: {status: $status, reason: $reason, blocking_findings: $blocking},
     findings: [
       {id: "stub-0001", rule_id: "stub/medium-check", skill: "stub",
        severity: "medium", confidence: 0.95, enforcing: $enforcing,

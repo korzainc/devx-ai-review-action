@@ -8,6 +8,11 @@ out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 out_dir="$RUNNER_TEMP/korza-review"
 mkdir -p "$out_dir"
 
+# The engine contract this action implements (mounts, env, result.json shape).
+# The engine states the major version it implements in result.json, so a
+# mismatched action/image pair fails loudly instead of misbehaving.
+contract_version=1
+
 # The review could not complete. Write the error everywhere it is read from,
 # then let fail-on-error decide whether that fails the step.
 engine_error() {
@@ -51,6 +56,7 @@ timeout --signal=TERM --kill-after=20 "$hard_timeout" \
   -e PR_NUMBER -e BASE_SHA -e HEAD_SHA -e CHECK_RUN_ID \
   -e REVIEW_CONFIG -e REVIEW_SKILLS -e REVIEW_TIMEOUT \
   -e REVIEW_OUTPUT_DIR=/github/out \
+  -e KORZA_CONTRACT_VERSION="$contract_version" \
   "$REVIEW_IMAGE"
 engine_exit=$?
 set -e
@@ -65,6 +71,11 @@ if [ ! -s "$result" ]; then
     engine_error "Engine timed out: no result after ${hard_timeout}s (timeout-seconds $REVIEW_TIMEOUT plus 30s grace)."
   fi
   engine_error "Engine exited with $engine_exit and produced no result."
+fi
+
+engine_contract="$(jq -r '.contract_version // "none"' "$result")"
+if [ "${engine_contract%%.*}" != "$contract_version" ]; then
+  engine_error "Engine image implements contract version $engine_contract; this action implements $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
 fi
 
 verdict="$(jq -r '.verdict.status' "$result")"

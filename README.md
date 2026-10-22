@@ -85,7 +85,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `allowed-associations` | `OWNER,MEMBER,COLLABORATOR` | Who may trigger by comment. |
 | `check-name` | `AI Code Review` | Name of the check run to require. |
 | `fail-on-error` | `false` | Report `failure` instead of `neutral` when the review cannot complete. |
-| `timeout-seconds` | `600` | Engine time budget. |
+| `timeout-seconds` | `600` | Engine time budget. The action kills the container 30s past it. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
 
@@ -129,10 +129,27 @@ read access to this one package only, so the token can pull nothing else.
 | `PR_NUMBER`, `BASE_SHA`, `HEAD_SHA` | The PR and the merge-base..head range to review |
 | `CHECK_RUN_ID` | The open check run. The engine may update its output text to show progress, but must not complete it. |
 | `REVIEW_CONFIG`, `REVIEW_SKILLS`, `REVIEW_TIMEOUT` | From the action inputs |
+| `KORZA_CONTRACT_VERSION` | The contract version this action implements, currently `1` |
 
 The engine writes `result.json` (a `ReviewResult`) and optionally `results.sarif`
 to `/github/out`, and posts review comments itself. It must not assume a home
 directory or a writable `/workspace`. Anything beyond this is a contract change.
+
+`result.json` must carry a top-level `contract_version` stating the major
+contract version the engine implements. The action refuses a result whose major
+version it does not speak and reports it like any engine error, so a mismatched
+action/image pair fails with a clear message instead of misbehaving. Bumping the
+major version means a new action release shipping the matching image.
+
+### Timeouts
+
+`REVIEW_TIMEOUT` is the engine's whole budget, and the engine should enforce it
+itself: finish within it, or time out gracefully and still write a `result.json`
+with `verdict.status: error` and a reason, which gives the PR a precise message.
+The action is the backstop, not the mechanism: 30 seconds past the budget it
+TERMs the container (KILL 20 seconds later) and reports a generic timeout error.
+Either way the check completes, `neutral` by default or `failure` with
+`fail-on-error: true`. A required check is never left hanging in progress.
 
 ## Versioning
 
