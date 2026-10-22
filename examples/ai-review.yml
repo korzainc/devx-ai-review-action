@@ -33,7 +33,7 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body \
-            "Comment \`/review\` on this PR for an AI code review by Korza. It runs on demand only."
+            "Comment \`/review\` on this PR for a DevX AI Review. It runs on demand only."
 
   review:
     if: >-
