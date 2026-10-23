@@ -19,7 +19,8 @@ it lands.
 on:
   issue_comment:
     types: [created]
-  pull_request:          # add once a skill blocks merges
+  pull_request:          # only for the one-time /review hint
+    types: [opened, ready_for_review]
 
 permissions:
   contents: read
@@ -32,10 +33,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  review:
+  hint:
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/review'))
+      github.event_name == 'pull_request' &&
+      ((github.event.action == 'opened' && !github.event.pull_request.draft) ||
+       github.event.action == 'ready_for_review') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body \
+            "Comment \`/review\` on this PR for a DevX AI Review. It runs on demand only."
+
+  review:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +66,8 @@ is fine.
 | Event | When to use it | Notes |
 | --- | --- | --- |
 | `issue_comment` | Always. On-demand reviews via `/review`. | Only `allowed-associations` can trigger. Works on fork PRs. |
-| `pull_request` | Once a skill blocks merges. | Runs on every push so the gate cannot be skipped. Fork PRs are skipped because their token is read-only; a maintainer can comment `/review` instead. |
+| `pull_request` (`opened`, `ready_for_review`) | Always. Posts a one-time comment telling the author how to request a review. | Never runs a review: every review costs model tokens. Skipped for fork PRs, whose token can't comment. |
+| `pull_request` (every push) | Once a skill blocks merges. | Add `synchronize` and `reopened`, and let the review job run on `pull_request`, so the gate cannot be skipped. Fork PRs are skipped because their token is read-only; a maintainer can comment `/review` instead. |
 
 ## The check
 
