@@ -11,6 +11,10 @@ skip() {
 }
 event() { jq -r "$1" "$GITHUB_EVENT_PATH"; }
 
+# The action can run more than once in a job. Start from a clean output dir so
+# a later step never reports an earlier invocation's result or summary.
+rm -rf "$RUNNER_TEMP/korza-review"
+
 case "$GITHUB_EVENT_NAME" in
   issue_comment)
     [ -n "$(event '.issue.pull_request // empty')" ] || skip "Comment is not on a pull request. Skipping."
@@ -86,4 +90,7 @@ out run true
 out pr-number "$pr"
 out base-sha "$base_sha"
 out head-sha "$head_sha"
+# Unique per invocation, even across matrix legs sharing a self-hosted runner's
+# Docker daemon, so the cleanup step removes this invocation's container only.
+out engine-container "korza-review-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
 echo "Reviewing PR #$pr: ${base_sha:0:7}..${head_sha:0:7}"

@@ -47,11 +47,10 @@ fi
 # engine from holding the job, and the check, until the 6 hour job limit.
 # --init gives the container a PID 1 that actually dies on SIGTERM.
 hard_timeout=$((REVIEW_TIMEOUT + 30))
-cname="korza-review-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$$"
 
 set +e
 timeout --signal=TERM --kill-after=20 "$hard_timeout" \
-  docker run --rm --init --name "$cname" \
+  docker run --rm --init --name "$ENGINE_CONTAINER" \
   --user "$(id -u):$(id -g)" \
   -v "$GITHUB_WORKSPACE:/workspace:ro" \
   -v "$GITHUB_EVENT_PATH:/github/event.json:ro" \
@@ -70,8 +69,9 @@ timeout --signal=TERM --kill-after=20 "$hard_timeout" \
 engine_exit=$?
 set -e
 # When the kill-after path fires, timeout kills the docker client and the
-# container outlives it. Make sure nothing is left running on the runner.
-docker rm -f "$cname" > /dev/null 2>&1 || true
+# container outlives it. Remove it before reading what it wrote. (A cancelled
+# job never gets here; the always() cleanup step in action.yml covers that.)
+docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
 
 result="$out_dir/result.json"
 if [ ! -s "$result" ]; then
@@ -88,7 +88,10 @@ if ! jq -e . "$result" > /dev/null 2>&1; then
   engine_error "Engine exited with $engine_exit and wrote an unreadable result.json."
 fi
 
-engine_contract="$(jq -r '.contract_version // "none"' "$result")"
+engine_contract="$(jq -r '.contract_version // empty' "$result")"
+if [ -z "$engine_contract" ]; then
+  engine_error "Engine image does not declare a contract_version in result.json; this action implements contract $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
+fi
 if [ "${engine_contract%%.*}" != "$contract_version" ]; then
   engine_error "Engine image implements contract version $engine_contract; this action implements $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
 fi

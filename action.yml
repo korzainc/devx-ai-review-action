@@ -52,8 +52,9 @@ inputs:
     default: "false"
   timeout-seconds:
     description: >
-      Hard time budget for the engine. The engine is told this number; the action
-      kills the container 30 seconds after it, and the check reports per fail-on-error.
+      Time budget for the engine, which is told this number and should enforce it.
+      As a backstop the action sends the container TERM 30 seconds past it and KILL
+      20 seconds after that; the check then reports per fail-on-error.
     required: false
     default: "600"
   upload-sarif:
@@ -116,7 +117,18 @@ runs:
         BASE_SHA: ${{ steps.prep.outputs.base-sha }}
         HEAD_SHA: ${{ steps.prep.outputs.head-sha }}
         CHECK_RUN_ID: ${{ steps.prep.outputs.check-run-id }}
+        ENGINE_CONTAINER: ${{ steps.prep.outputs.engine-container }}
       run: bash "$GITHUB_ACTION_PATH/scripts/run.sh"
+
+    # A cancelled job kills run.sh outright, so its own cleanup never runs and
+    # the engine container outlives the docker client. On a persistent
+    # self-hosted runner it would keep running, and spending the API key.
+    - name: Remove engine container
+      if: always() && steps.prep.outputs.engine-container != ''
+      shell: bash
+      env:
+        ENGINE_CONTAINER: ${{ steps.prep.outputs.engine-container }}
+      run: docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
 
     - name: Complete check
       if: always() && steps.prep.outputs.check-run-id != ''

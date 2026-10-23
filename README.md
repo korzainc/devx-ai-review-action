@@ -85,7 +85,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `allowed-associations` | `OWNER,MEMBER,COLLABORATOR` | Who may trigger by comment. |
 | `check-name` | `AI Code Review` | Name of the check run to require. |
 | `fail-on-error` | `false` | Report `failure` instead of `neutral` when the review cannot complete. |
-| `timeout-seconds` | `600` | Engine time budget. The action kills the container 30s past it. |
+| `timeout-seconds` | `600` | Engine time budget. 30s past it the action sends TERM, then KILL 20s later. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
 
@@ -147,9 +147,13 @@ major version means a new action release shipping the matching image.
 itself: finish within it, or time out gracefully and still write a `result.json`
 with `verdict.status: error` and a reason, which gives the PR a precise message.
 The action is the backstop, not the mechanism: 30 seconds past the budget it
-TERMs the container (KILL 20 seconds later) and reports a generic timeout error.
-Either way the check completes, `neutral` by default or `failure` with
+TERMs the container (KILL 20 seconds later). An engine that writes `result.json`
+on TERM has that result used; otherwise the action reports a generic timeout
+error. Either way the check completes, `neutral` by default or `failure` with
 `fail-on-error: true`. A required check is never left hanging in progress.
+
+If the job is cancelled, a cleanup step removes the engine container, so a
+hung engine does not keep running on a self-hosted runner.
 
 ## Versioning
 
