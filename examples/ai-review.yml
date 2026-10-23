@@ -16,10 +16,6 @@ permissions:
   checks: write          # the pass/fail check on the PR head commit
   packages: read         # pull the engine image with GITHUB_TOKEN (korzainc repos)
 
-concurrency:
-  group: ai-review-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   # Tells the author how to ask for a review, once per PR.
   hint:
@@ -38,21 +34,38 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body \
-            "Comment \`/review\` on this PR for a DevX AI Review. It runs on demand only."
+          if gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[].body' \
+            | grep -q 'devx-ai-review-hint'; then
+            echo "Review hint already posted on #$PR."
+            exit 0
+          fi
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file - <<'MSG'
+          <!-- devx-ai-review-hint -->
+          💡 **DevX AI Review** is available on this PR. Comment `/review` to run it. Reviews run on demand only.
+
+          <details>
+          <summary>How it works</summary>
+
+          - Findings are posted as inline comments on the changed lines, often with a suggested fix.
+          - The result appears as the **AI Code Review** check on this PR.
+          - Comment `/review` again after new commits to re-run it.
+          - Only repository members and collaborators can trigger a review.
+
+          </details>
+          MSG
 
   review:
     # On demand only: a /review comment on a PR (reviews cost model tokens).
     if: >-
       github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
     runs-on: ubuntu-latest
+    concurrency:
+      group: ai-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The v1 tag is the supported way to consume this action: it moves with
-      # releases on purpose. Pin a digest-tagged release instead if your org
-      # requires immutable refs.
-      # Semgrep flags this tag as mutable. That is deliberate: v1 moves with
-      # releases and is the supported way to consume this action.
+      # v1 is a moving tag by design (Semgrep flags it as mutable): it is the supported
+      # way to consume this action. Pin a release tag if your org requires immutable refs.
       - uses: korzainc/devx-ai-review-action@v1
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
