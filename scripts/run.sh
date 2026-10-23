@@ -32,6 +32,15 @@ case "$REVIEW_TIMEOUT" in
     REVIEW_TIMEOUT=600
     ;;
 esac
+# Force base 10, or a leading zero reads as octal ("0600" is 384, "09" aborts).
+REVIEW_TIMEOUT=$((10#$REVIEW_TIMEOUT))
+
+# Pull before the clock starts, so a slow pull does not eat the engine's
+# budget. An image already on the runner (built earlier in the job) is used as is.
+if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
+  && ! docker pull --quiet "$REVIEW_IMAGE" > /dev/null; then
+  engine_error "Could not pull engine image $REVIEW_IMAGE."
+fi
 
 # The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still
 # write a result) on its own; this wrapper is the backstop that keeps a hung
@@ -71,6 +80,12 @@ if [ ! -s "$result" ]; then
     engine_error "Engine timed out: no result after ${hard_timeout}s (timeout-seconds $REVIEW_TIMEOUT plus 30s grace)."
   fi
   engine_error "Engine exited with $engine_exit and produced no result."
+fi
+
+# A TERM can land mid-write. Report an unreadable result like any engine error
+# rather than letting jq fail the step under set -e.
+if ! jq -e . "$result" > /dev/null 2>&1; then
+  engine_error "Engine exited with $engine_exit and wrote an unreadable result.json."
 fi
 
 engine_contract="$(jq -r '.contract_version // "none"' "$result")"
