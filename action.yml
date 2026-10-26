@@ -61,7 +61,7 @@ inputs:
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false
-    default: ghcr.io/korzainc/ai-review@sha256:REPLACE_WITH_RELEASE_DIGEST
+    default: ghcr.io/korzainc/devx-ai-review@sha256:7b664b042d992cdf27099c23c02e8baf248c7f1371e8cb75f83e1fcd7e6e7825
 
 outputs:
   verdict:
