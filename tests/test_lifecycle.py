@@ -18,19 +18,22 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SARIF = '{"version":"2.1.0","runs":[]}'
+HEAD, BASE = "a" * 40, "c" * 40
+IMAGE = "ghcr.io/example/engine@sha256:" + "b" * 64
 
 
 def result(status, findings=None):
     return json.dumps({
         "contract_version": 1,
         "verdict": {"status": status, "reason": "Fixture " + status,
-                    "blocking_findings": ["example"] if status == "fail" else []},
-        "findings": findings or [], "skills_run": ["fixture"],
+                    "blocking_findings": [f["id"] for f in findings or [] if f["enforcing"]]
+                                         if status == "fail" else []},
+        "findings": findings or [], "skills_run": ["bug-hunter"],
         "provenance": {"engine_version": "fixture", "image_digest": "", "model": "none"},
     })
 
 
-FINDING = {"id": "example", "rule_id": "fixture/check", "skill": "fixture",
+FINDING = {"id": "example", "rule_id": "bug-hunter/check", "skill": "bug-hunter",
            "severity": "high", "confidence": 1, "enforcing": True,
            "location": {"path": "file.py", "start_line": 2, "end_line": 2},
            "message": "Fixture finding", "suggestion": ""}
@@ -50,9 +53,36 @@ if args[:2] == ["rm", "-f"]:
 assert args[:4] == ["run", "--rm", "--init", "--name"], args
 assert args[4] == os.environ["ENGINE_CONTAINER"], args
 assert "KORZA_CONTRACT_VERSION=1" in args, args
+assert args[-1] == "action-review", args
 mounts = [args[i+1] for i, arg in enumerate(args[:-1]) if arg == "-v"]
 out = pathlib.Path(next(m[:-len(":/github/out")] for m in mounts if m.endswith(":/github/out")))
 pathlib.Path(os.environ["DOCKER_RECORD"]).write_text(str(out))
+
+
+def write_handoff(out, text):
+    # The typed publisher handoff an engine writes next to result.json.
+    try:
+        top = json.loads(text)
+    except ValueError:
+        return
+    found = top.get("findings") if isinstance(top, dict) else None
+    typed = [{"id": f["id"], "reviewer": f["skill"], "unit_id": "u1",
+              "file": f["location"]["path"], "start_line": f["location"]["start_line"],
+              "end_line": f["location"]["end_line"], "severity": f["severity"],
+              "category": "bug", "title": f["message"], "body": f["message"],
+              "confidence": f["confidence"]}
+             for f in found if isinstance(f, dict)] if isinstance(found, list) else []
+    (out / "publish").mkdir()
+    (out / "publish/result.json").write_text(json.dumps({
+        "schema_version": 1, "run_id": "review-1", "head_sha": os.environ["HEAD_SHA"],
+        "findings": typed, "provenance": {"package_version": "0", "provider": "fixture"}}))
+    (out / "publish/snapshot.json").write_text(json.dumps({
+        "schema_version": 1, "provider": "github", "repo": os.environ["GITHUB_REPOSITORY"],
+        "pr": {"number": int(os.environ["PR_NUMBER"]), "url": "https://github.com/fixture/repo/pull/7",
+               "title": "Fixture"},
+        "refs": {"base_ref": "main", "base_sha": os.environ["BASE_SHA"], "head_ref": "branch",
+                 "head_sha": os.environ["HEAD_SHA"], "merge_base_sha": os.environ["BASE_SHA"]},
+        "diff_path": "diff.patch", "workspace": "/workspace"}))
 '''
 
 
@@ -60,7 +90,9 @@ class LifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
+        # Resolved: the host reads engine output without following symlinks,
+        # and macOS temp dirs sit under one (/var -> /private/var).
+        self.base = Path(self.temp.name).resolve()
         for name in ("bin", "home", "runner", "workspace"):
             (self.base / name).mkdir()
         (self.base / "event.json").write_text('{"number":1}')
@@ -71,7 +103,8 @@ class LifecycleTests(unittest.TestCase):
             "GITHUB_WORKSPACE": str(self.base / "workspace"),
             "GITHUB_EVENT_PATH": str(self.base / "event.json"),
             "GITHUB_REPOSITORY": "fixture/repo", "GITHUB_SERVER_URL": "https://github.invalid",
-            "GITHUB_RUN_ID": "42", "CHECK_RUN_ID": "7", "REVIEW_IMAGE": "fixture:offline",
+            "GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1", "CHECK_RUN_ID": "7", "REVIEW_IMAGE": IMAGE,
+            "PR_NUMBER": "7", "HEAD_SHA": HEAD, "BASE_SHA": BASE,
             "ENGINE_CONTAINER": "korza-review-fixture", "REVIEW_TIMEOUT": "600",
             "FAKE_RESULT": "", "FAKE_EXIT": "0", "FAKE_SARIF": "", "FAKE_KIND": "file",
             "FAKE_PULL_EXIT": "0", "FAKE_PLANT": "",
@@ -89,6 +122,7 @@ elif os.environ["FAKE_KIND"] == "directory":
     (out / "result.json").mkdir()
 elif os.environ["FAKE_RESULT"]:
     (out / "result.json").write_text(os.environ["FAKE_RESULT"])
+    write_handoff(out, os.environ["FAKE_RESULT"])
 if os.environ["FAKE_SARIF"] and not os.environ["FAKE_PLANT"]:
     (out / "results.sarif").write_text(os.environ["FAKE_SARIF"])
 sys.exit(int(os.environ["FAKE_EXIT"]))
@@ -132,6 +166,10 @@ pathlib.Path(os.environ["GH_RECORD"]).write_text(json.dumps(payload))
         values = {"inputs.github-token": "", "inputs.fail-on-error": env["FAIL_ON_ERROR"],
                   "steps.prep.outputs.check-run-id": "7", "steps.review.outcome": outcome or "success"}
         values.update({"steps.review.outputs." + key: value for key, value in outputs.items()})
+        if outputs.get("review-completed") == "true":
+            # Publishing is covered by test_publish; here it delivered.
+            values.update({"steps.publish.outcome": "success",
+                           "steps.publish.outputs.delivery": "success"})
         final_env = dict(env, GH_RECORD=str(self.base / (Path(env["GITHUB_OUTPUT"]).stem + ".patch")))
         for key, expression in re.findall(r"^        ([A-Z_]+): \$\{\{ ([^}]+) \}\}$", step, re.M):
             final_env[key] = values.get(expression.strip(), "")
@@ -340,7 +378,8 @@ sys.exit(17)
 
     def test_contract_version_is_required_but_never_unblocks_a_fail(self):
         for version, status, conclusion in ((None, "pass", "neutral"), (2, "pass", "neutral"),
-                                            ("1.4", "pass", "success"), (None, "fail", "failure")):
+                                            ("1", "pass", "neutral"), (None, "fail", "failure"),
+                                            (1, "pass", "success")):
             payload = json.loads(result(status))
             if version is None:
                 del payload["contract_version"]
@@ -370,7 +409,7 @@ sys.exit(17)
                 _, outputs, directory, _ = self.lifecycle(content, code, FAKE_PLANT=str(victim), name="plant")
                 self.assertEqual(victim.read_text(), "ORIGINAL")
                 self.assertNotIn("sarif-file", outputs)
-                self.assertFalse((directory / "summary.md").is_symlink())
+                self.assertFalse(Path(outputs["summary-file"]).is_relative_to(directory))
 
     def test_fail_reason_cannot_inject_workflow_commands(self):
         payload = json.loads(result("fail", [FINDING]))
@@ -379,9 +418,8 @@ sys.exit(17)
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(outputs["verdict"], "fail")
         self.assertEqual(patch["conclusion"], "failure")
-        command_lines = [line for line in proc.stdout.splitlines() if line.startswith("::")]
-        self.assertEqual(len(command_lines), 1, command_lines)
-        self.assertIn("%0A::add-mask::", command_lines[0])
+        self.assertNotIn("fixture-injected", proc.stdout + proc.stderr)
+        self.assertIn(payload["verdict"]["reason"], patch["output"]["summary"])
 
 
 if __name__ == "__main__":

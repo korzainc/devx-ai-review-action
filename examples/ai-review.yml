@@ -56,17 +56,22 @@ jobs:
 
   review:
     # On demand only: a /review comment on a PR (reviews cost model tokens).
+    # Check the command and association before concurrency can cancel another run.
     if: >-
-      github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/review' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association)
     runs-on: ubuntu-latest
     concurrency:
       group: ai-review-${{ github.event.issue.number }}
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # v1 is a moving tag by design (Semgrep flags it as mutable): it is the supported
-      # way to consume this action. Pin a release tag if your org requires immutable refs.
-      - uses: korzainc/devx-ai-review-action@v1
+      # pre-release is a moving branch for trying the action before v1 (Semgrep
+      # flags it as mutable). Pin a commit SHA from it if your org requires immutable refs.
+      - uses: korzainc/devx-ai-review-action@pre-release
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           # Repos outside korzainc also need:
