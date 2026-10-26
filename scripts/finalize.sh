@@ -26,7 +26,11 @@ else
   title="Review could not complete"
 fi
 
-if [ -s "$summary_file" ]; then
+# On cancel, run.sh may still be writing a summary as the engine is torn down,
+# and it would describe the teardown, not the cancellation.
+if [ "$conclusion" = "cancelled" ]; then
+  summary="The run was cancelled before the review finished."
+elif [ -s "$summary_file" ]; then
   summary="$(cat "$summary_file")"
 else
   summary="The review did not produce a result. See the workflow run logs."
