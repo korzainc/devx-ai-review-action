@@ -9,7 +9,8 @@
 #   clean     no findings, verdict pass
 #   error     verdict error, as if the review could not complete
 #   crash     exit nonzero without writing result.json
-#   sleep     sleep REVIEW_TIMEOUT seconds first, to test cancellation
+#   sleep     hang well past REVIEW_TIMEOUT, to test cancellation and the
+#             action's timeout backstop
 set -euo pipefail
 
 OUT_DIR="${REVIEW_OUTPUT_DIR:-/github/out}"
@@ -30,9 +31,11 @@ if [ "$mode" = "crash" ]; then
   exit 2
 fi
 if [ "$mode" = "sleep" ]; then
-  echo "Sleeping ${REVIEW_TIMEOUT:-600}s so the run can be cancelled."
-  sleep "${REVIEW_TIMEOUT:-600}"
-  mode=advisory
+  # A real hung engine never respects its budget, so neither does this one.
+  hang=$((${REVIEW_TIMEOUT:-600} + 3600))
+  echo "Simulating a hung engine: sleeping ${hang}s, past the ${REVIEW_TIMEOUT:-600}s budget."
+  sleep "$hang"
+  exit 2
 fi
 
 provenance() {
@@ -41,7 +44,8 @@ provenance() {
 
 if [ "$mode" = "error" ]; then
   jq -n --argjson prov "$(provenance)" \
-    '{verdict: {status: "error", reason: "Stub simulated an engine error.", blocking_findings: []},
+    '{contract_version: 1,
+      verdict: {status: "error", reason: "Stub simulated an engine error.", blocking_findings: []},
       findings: [], skills_run: ["stub"], provenance: $prov}' > "$OUT_DIR/result.json"
   exit 0
 fi
@@ -69,7 +73,8 @@ fi
 
 if [ "$mode" = "clean" ]; then
   jq -n --argjson prov "$(provenance)" \
-    '{verdict: {status: "pass", reason: "No findings.", blocking_findings: []},
+    '{contract_version: 1,
+      verdict: {status: "pass", reason: "No findings.", blocking_findings: []},
       findings: [], skills_run: ["stub"], provenance: $prov}' > "$OUT_DIR/result.json"
   echo "Result written: pass, 0 findings."
   exit 0
@@ -100,7 +105,8 @@ jq -n \
   --arg path1 "$path1" --argjson line1 "$line1" --arg sugg "$line1_text" \
   --arg path2 "$path2" --argjson line2 "$line2" \
   --argjson prov "$(provenance)" \
-  '{verdict: {status: $status, reason: $reason, blocking_findings: $blocking},
+  '{contract_version: 1,
+    verdict: {status: $status, reason: $reason, blocking_findings: $blocking},
     findings: [
       {id: "stub-0001", rule_id: "stub/medium-check", skill: "stub",
        severity: "medium", confidence: 0.95, enforcing: $enforcing,

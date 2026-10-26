@@ -22,6 +22,7 @@ SARIF = '{"version":"2.1.0","runs":[]}'
 
 def result(status, findings=None):
     return json.dumps({
+        "contract_version": 1,
         "verdict": {"status": status, "reason": "Fixture " + status,
                     "blocking_findings": ["example"] if status == "fail" else []},
         "findings": findings or [], "skills_run": ["fixture"],
@@ -33,6 +34,26 @@ FINDING = {"id": "example", "rule_id": "fixture/check", "skill": "fixture",
            "severity": "high", "confidence": 1, "enforcing": True,
            "location": {"path": "file.py", "start_line": 2, "end_line": 2},
            "message": "Fixture finding", "suggestion": ""}
+
+
+# Shared start of every fake docker: answer the calls around the engine run
+# (image inspect, pull, rm -f), then check the run itself and record out_dir.
+DOCKER_PRELUDE = '''import json, os, pathlib, sys
+args = sys.argv[1:]
+if args[:2] == ["image", "inspect"]:
+    sys.exit(1)
+if args[:1] == ["pull"]:
+    sys.exit(int(os.environ.get("FAKE_PULL_EXIT", "0")))
+if args[:2] == ["rm", "-f"]:
+    assert args[2] == os.environ["ENGINE_CONTAINER"], args
+    sys.exit(0)
+assert args[:4] == ["run", "--rm", "--init", "--name"], args
+assert args[4] == os.environ["ENGINE_CONTAINER"], args
+assert "KORZA_CONTRACT_VERSION=1" in args, args
+mounts = [args[i+1] for i, arg in enumerate(args[:-1]) if arg == "-v"]
+out = pathlib.Path(next(m[:-len(":/github/out")] for m in mounts if m.endswith(":/github/out")))
+pathlib.Path(os.environ["DOCKER_RECORD"]).write_text(str(out))
+'''
 
 
 class LifecycleTests(unittest.TestCase):
@@ -51,23 +72,24 @@ class LifecycleTests(unittest.TestCase):
             "GITHUB_EVENT_PATH": str(self.base / "event.json"),
             "GITHUB_REPOSITORY": "fixture/repo", "GITHUB_SERVER_URL": "https://github.invalid",
             "GITHUB_RUN_ID": "42", "CHECK_RUN_ID": "7", "REVIEW_IMAGE": "fixture:offline",
+            "ENGINE_CONTAINER": "korza-review-fixture", "REVIEW_TIMEOUT": "600",
             "FAKE_RESULT": "", "FAKE_EXIT": "0", "FAKE_SARIF": "", "FAKE_KIND": "file",
+            "FAKE_PULL_EXIT": "0", "FAKE_PLANT": "",
         }
-        self.executable("docker", '''import json, os, pathlib, sys
-args = sys.argv[1:]
-assert args[:2] == ["run", "--rm"], args
-mounts = [args[i+1] for i, arg in enumerate(args[:-1]) if arg == "-v"]
-out = pathlib.Path(next(m[:-len(":/github/out")] for m in mounts if m.endswith(":/github/out")))
+        self.executable("docker", DOCKER_PRELUDE + '''
 assert os.environ["GITHUB_WORKSPACE"] + ":/workspace:ro" in mounts
 assert os.environ["GITHUB_EVENT_PATH"] + ":/github/event.json:ro" in mounts
-pathlib.Path(os.environ["DOCKER_RECORD"]).write_text(str(out))
+if os.environ["FAKE_PLANT"]:
+    # An engine planting symlinks to a runner file the host would write or upload.
+    for name in ("summary.md", "results.sarif"):
+        (out / name).symlink_to(os.environ["FAKE_PLANT"])
 if os.environ["FAKE_KIND"] == "symlink":
     (out / "result.json").symlink_to(os.environ["FAKE_TARGET"])
 elif os.environ["FAKE_KIND"] == "directory":
     (out / "result.json").mkdir()
 elif os.environ["FAKE_RESULT"]:
     (out / "result.json").write_text(os.environ["FAKE_RESULT"])
-if os.environ["FAKE_SARIF"]:
+if os.environ["FAKE_SARIF"] and not os.environ["FAKE_PLANT"]:
     (out / "results.sarif").write_text(os.environ["FAKE_SARIF"])
 sys.exit(int(os.environ["FAKE_EXIT"]))
 ''')
@@ -98,7 +120,9 @@ pathlib.Path(os.environ["GH_RECORD"]).write_text(json.dumps(payload))
         for line in lines:
             self.assertIn("=", line, "Invalid GitHub step output")
         outputs = dict(line.split("=", 1) for line in lines)
-        return proc, outputs, Path(record.read_text()), env
+        # No record when the engine never ran (a failed pull).
+        directory = Path(record.read_text()) if record.exists() else None
+        return proc, outputs, directory, env
 
     def finalize(self, outputs, env, outcome=None):
         # Resolve the actual Complete check env declarations. This catches a
@@ -288,12 +312,7 @@ pathlib.Path(os.environ["GH_RECORD"]).write_text(json.dumps(payload))
         # Oversized failed-process output is refused without parsing and blocks.
         oversized = result("fail") + " " * (1024 * 1024)
         # Keep large payload out of exec's environment-size limit.
-        self.executable("docker", '''import os, pathlib
-path = pathlib.Path(os.environ["RUNNER_TEMP"])
-import sys
-args = sys.argv[1:]
-out = pathlib.Path(next(args[i+1][:-len(":/github/out")] for i, a in enumerate(args[:-1]) if a == "-v" and args[i+1].endswith(":/github/out")))
-pathlib.Path(os.environ["DOCKER_RECORD"]).write_text(str(out))
+        self.executable("docker", DOCKER_PRELUDE + '''
 (out / "result.json").write_text(pathlib.Path(os.environ["FAKE_TARGET"]).read_text())
 sys.exit(17)
 ''')
@@ -305,6 +324,64 @@ sys.exit(17)
             self.assertNotIn("findings", outputs)
             self.assertNotIn("sarif-file", outputs)
             self.assertEqual(patch["conclusion"], "failure")
+
+    def test_nonzero_exit_keeps_the_engine_reason_and_names_kills(self):
+        payload = json.loads(result("error"))
+        payload["verdict"]["reason"] = "Engine budget exhausted after 600s."
+        _, outputs, _, patch = self.lifecycle(json.dumps(payload), 143)
+        self.assertEqual(outputs["verdict"], "error")
+        self.assertEqual(patch["conclusion"], "neutral")
+        self.assertIn("Engine exited with 143", patch["output"]["summary"])
+        self.assertIn("Engine budget exhausted after 600s.", patch["output"]["summary"])
+        # 137 well inside the budget is a kill (OOM, or cleanup on cancel), not a timeout.
+        _, _, _, patch = self.lifecycle("", 137, name="killed")
+        self.assertIn("killed", patch["output"]["summary"])
+        self.assertNotIn("timed out", patch["output"]["summary"])
+
+    def test_contract_version_is_required_but_never_unblocks_a_fail(self):
+        for version, status, conclusion in ((None, "pass", "neutral"), (2, "pass", "neutral"),
+                                            ("1.4", "pass", "success"), (None, "fail", "failure")):
+            payload = json.loads(result(status))
+            if version is None:
+                del payload["contract_version"]
+            else:
+                payload["contract_version"] = version
+            with self.subTest(version=version, status=status):
+                _, outputs, _, patch = self.lifecycle(json.dumps(payload), name="cv")
+                self.assertEqual(patch["conclusion"], conclusion)
+                if conclusion != "success":
+                    self.assertEqual(outputs["verdict"], "error")
+                    self.assertIn("contract", patch["output"]["summary"])
+
+    def test_pull_failure_is_an_incomplete_review(self):
+        for policy, code, conclusion in (("false", 0, "neutral"), ("true", 1, "failure")):
+            proc, outputs, _, env = self.run_review(result("pass"), policy=policy, FAKE_PULL_EXIT="1")
+            self.assertEqual(proc.returncode, code, proc.stderr)
+            self.assertEqual(outputs["verdict"], "error")
+            patch = self.finalize(outputs, env, "success" if code == 0 else "failure")
+            self.assertEqual(patch["conclusion"], conclusion)
+            self.assertIn("Could not pull", patch["output"]["summary"])
+
+    def test_engine_planted_symlinks_are_neither_written_nor_published(self):
+        victim = self.base / "runner-file"
+        victim.write_text("ORIGINAL")
+        for content, code in ((result("pass", [FINDING]), 0), ("", 0), (result("pass"), 17)):
+            with self.subTest(content=content[:20], code=code):
+                _, outputs, directory, _ = self.lifecycle(content, code, FAKE_PLANT=str(victim), name="plant")
+                self.assertEqual(victim.read_text(), "ORIGINAL")
+                self.assertNotIn("sarif-file", outputs)
+                self.assertFalse((directory / "summary.md").is_symlink())
+
+    def test_fail_reason_cannot_inject_workflow_commands(self):
+        payload = json.loads(result("fail", [FINDING]))
+        payload["verdict"]["reason"] = "Blocked.\n::add-mask::fixture-injected\r\n::warning::x"
+        proc, outputs, _, patch = self.lifecycle(json.dumps(payload))
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(outputs["verdict"], "fail")
+        self.assertEqual(patch["conclusion"], "failure")
+        command_lines = [line for line in proc.stdout.splitlines() if line.startswith("::")]
+        self.assertEqual(len(command_lines), 1, command_lines)
+        self.assertIn("%0A::add-mask::", command_lines[0])
 
 
 if __name__ == "__main__":

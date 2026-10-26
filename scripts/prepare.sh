@@ -86,4 +86,7 @@ out run true
 out pr-number "$pr"
 out base-sha "$base_sha"
 out head-sha "$head_sha"
+# Unique per invocation, even across matrix legs sharing a self-hosted runner's
+# Docker daemon, so the cleanup step removes this invocation's container only.
+out engine-container "korza-review-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$(od -An -N4 -tx4 /dev/urandom | tr -d ' \n')"
 echo "Reviewing PR #$pr: ${base_sha:0:7}..${head_sha:0:7}"

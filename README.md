@@ -19,7 +19,8 @@ it lands.
 on:
   issue_comment:
     types: [created]
-  pull_request:          # add once a skill blocks merges
+  pull_request:          # only for the one-time /review hint
+    types: [opened, ready_for_review]
 
 permissions:
   contents: read
@@ -32,10 +33,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  review:
+  hint:
     if: >-
-      github.event_name == 'pull_request' ||
-      (github.event.issue.pull_request && startsWith(github.event.comment.body, '/review'))
+      github.event_name == 'pull_request' &&
+      ((github.event.action == 'opened' && !github.event.pull_request.draft) ||
+       github.event.action == 'ready_for_review') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body \
+            "Comment \`/review\` on this PR for a DevX AI Review. It runs on demand only."
+
+  review:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +66,8 @@ is fine.
 | Event | When to use it | Notes |
 | --- | --- | --- |
 | `issue_comment` | Always. On-demand reviews via `/review`. | Only `allowed-associations` can trigger. Works on fork PRs. |
-| `pull_request` | Once a skill blocks merges. | Runs on every push so the gate cannot be skipped. Fork PRs are skipped because their token is read-only; a maintainer can comment `/review` instead. |
+| `pull_request` (`opened`, `ready_for_review`) | Always. Posts a one-time comment telling the author how to request a review. | Never runs a review: every review costs model tokens. |
+| `pull_request` (every push) | Once a skill blocks merges. | Add `synchronize` and `reopened`, and let the review job run on `pull_request`, so the gate cannot be skipped. Fork PRs are skipped because their token is read-only; a maintainer can comment `/review` instead. |
 
 ## The check
 
@@ -65,7 +80,14 @@ always completes it, even if the engine crashes or the run is cancelled:
 | No blocking findings | `success` |
 | Blocking findings | `failure` |
 | Review could not complete | `neutral` (or `failure` with `fail-on-error: true`) |
+| Review could not complete, but the engine had reported blocking findings | `failure` |
 | Run cancelled | `cancelled` |
+
+A review only completes when the engine exits 0 and writes a valid `result.json`.
+Anything else (a crash, a timeout, an unreadable or mismatched result) is
+"could not complete": its findings and SARIF are not published. A result that
+says `fail` keeps the check failing even then, so a crash can never open the
+gate; an oversized result from a crashed engine is treated the same way.
 
 Require **AI Code Review** in branch protection or a ruleset. On `pull_request`
 the workflow job also appears as `AI Code Review / review (pull_request)`; don't
@@ -85,7 +107,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `allowed-associations` | `OWNER,MEMBER,COLLABORATOR` | Who may trigger by comment. |
 | `check-name` | `AI Code Review` | Name of the check run to require. |
 | `fail-on-error` | `false` | Report `failure` instead of `neutral` when the review cannot complete. |
-| `timeout-seconds` | `600` | Engine time budget. |
+| `timeout-seconds` | `600` | Engine time budget. 30s past it the action sends TERM, then KILL 20s later. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
 
@@ -129,10 +151,31 @@ read access to this one package only, so the token can pull nothing else.
 | `PR_NUMBER`, `BASE_SHA`, `HEAD_SHA` | The PR and the merge-base..head range to review |
 | `CHECK_RUN_ID` | The open check run. The engine may update its output text to show progress, but must not complete it. |
 | `REVIEW_CONFIG`, `REVIEW_SKILLS`, `REVIEW_TIMEOUT` | From the action inputs |
+| `KORZA_CONTRACT_VERSION` | The contract version this action implements, currently `1` |
 
 The engine writes `result.json` (a `ReviewResult`) and optionally `results.sarif`
 to `/github/out`, and posts review comments itself. It must not assume a home
 directory or a writable `/workspace`. Anything beyond this is a contract change.
+
+`result.json` must carry a top-level `contract_version` stating the major
+contract version the engine implements. The action refuses a result whose major
+version it does not speak and reports it like any engine error, so a mismatched
+action/image pair fails with a clear message instead of misbehaving. Bumping the
+major version means a new action release shipping the matching image.
+
+### Timeouts
+
+`REVIEW_TIMEOUT` is the engine's whole budget, and the engine should enforce it
+itself: finish within it, or time out gracefully and still write a `result.json`
+with `verdict.status: error` and a reason, which gives the PR a precise message.
+The action is the backstop, not the mechanism: 30 seconds past the budget it
+TERMs the container (KILL 20 seconds later). If the engine writes `result.json`
+on TERM, the check shows its reason next to the timeout; otherwise the action
+reports a generic timeout error. Either way the check completes, `neutral` by default or `failure` with
+`fail-on-error: true`. A required check is never left hanging in progress.
+
+If the job is cancelled, a cleanup step removes the engine container, so a
+hung engine does not keep running on a self-hosted runner.
 
 ## Versioning
 
