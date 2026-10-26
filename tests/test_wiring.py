@@ -2,6 +2,7 @@
 import json
 import ast
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -23,6 +24,9 @@ def github_equal(left, right):
 
 
 def github_expression(expression, values, *, allowed_functions):
+    # Expression string literals have no escape sequences: '\n' stays a backslash and
+    # an n (fromJSON then decodes it). Parse them as Python raw strings to match.
+    expression = re.sub(r"'([^']*)'", r"r'\1'", expression)
     tree = ast.parse(expression.replace("&&", " and ").replace("||", " or "), mode="eval")
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or,
@@ -203,7 +207,7 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         example = (ROOT / "examples/ai-review.yml").read_text()
         review = example.split("  review:\n", 1)[1]
         gate = review.split("    concurrency:\n", 1)[0]
-        self.assertIn("github.event.comment.body == '/review'", gate)
+        self.assertIn("github.event.comment.body", gate)
         self.assertIn("github.event.comment.author_association", gate)
         self.assertIn("OWNER", gate)
         self.assertIn("MEMBER", gate)
@@ -409,7 +413,9 @@ pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdi
         readme = (ROOT / "README.md").read_text().split("```yaml\n", 1)[1].split("```", 1)[0]
         example = (ROOT / "examples/ai-review.yml").read_text()
         cases = [("issue_comment", "/review", role, True) for role in ("OWNER", "MEMBER", "COLLABORATOR")]
-        cases += [("issue_comment", command, "MEMBER", True) for command in ("/Review", "/REVIEW")]
+        # The comment box submits a trailing newline when the author presses Enter.
+        cases += [("issue_comment", command, "MEMBER", True)
+                  for command in ("/Review", "/REVIEW", "/review\n", "/review\r\n")]
         cases += [("issue_comment", command, role, False) for command, role in
                   (("/review", "CONTRIBUTOR"), ("/review invalid", "MEMBER"),
                    ("/reviewdog", "MEMBER"), ("ordinary comment", "MEMBER"))]

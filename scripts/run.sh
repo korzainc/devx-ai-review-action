@@ -71,7 +71,7 @@ fi
 pull_timeout=300
 if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
   && ! timeout "$pull_timeout" docker pull --quiet "$REVIEW_IMAGE" > /dev/null; then
-  incomplete "Could not pull engine image $REVIEW_IMAGE within ${pull_timeout}s."
+  incomplete "Could not pull engine image $REVIEW_IMAGE. Check that this repo has read access to the package (or pass registry-token); a pull also gives up after ${pull_timeout}s."
 fi
 
 # The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still

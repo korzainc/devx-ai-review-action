@@ -57,7 +57,7 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      github.event.comment.body == '/review' &&
+      contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
                github.event.comment.author_association)
     runs-on: ubuntu-latest
