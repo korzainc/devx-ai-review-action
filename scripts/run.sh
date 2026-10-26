@@ -8,8 +8,49 @@ out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 out_dir="$RUNNER_TEMP/korza-review"
 mkdir -p "$out_dir"
 
+# The engine contract this action implements (mounts, env, result.json shape).
+# The engine states the major version it implements in result.json, so a
+# mismatched action/image pair fails loudly instead of misbehaving.
+contract_version=1
+
+# The review could not complete. Write the error everywhere it is read from,
+# then let fail-on-error decide whether that fails the step.
+engine_error() {
+  out verdict error
+  printf '%s\n' "$1" > "$out_dir/summary.md"
+  if [ "$FAIL_ON_ERROR" = "true" ]; then
+    echo "::error::$1"
+    exit 1
+  fi
+  echo "::warning::$1 The check reports neutral (fail-on-error is false)."
+  exit 0
+}
+
+case "$REVIEW_TIMEOUT" in
+  '' | *[!0-9]*)
+    echo "::warning::timeout-seconds '$REVIEW_TIMEOUT' is not a number. Using 600."
+    REVIEW_TIMEOUT=600
+    ;;
+esac
+# Force base 10, or a leading zero reads as octal ("0600" is 384, "09" aborts).
+REVIEW_TIMEOUT=$((10#$REVIEW_TIMEOUT))
+
+# Pull before the clock starts, so a slow pull does not eat the engine's
+# budget. An image already on the runner (built earlier in the job) is used as is.
+if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
+  && ! docker pull --quiet "$REVIEW_IMAGE" > /dev/null; then
+  engine_error "Could not pull engine image $REVIEW_IMAGE."
+fi
+
+# The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still
+# write a result) on its own; this wrapper is the backstop that keeps a hung
+# engine from holding the job, and the check, until the 6 hour job limit.
+# --init gives the container a PID 1 that actually dies on SIGTERM.
+hard_timeout=$((REVIEW_TIMEOUT + 30))
+
 set +e
-docker run --rm \
+timeout --signal=TERM --kill-after=20 "$hard_timeout" \
+  docker run --rm --init --name "$ENGINE_CONTAINER" \
   --user "$(id -u):$(id -g)" \
   -v "$GITHUB_WORKSPACE:/workspace:ro" \
   -v "$GITHUB_EVENT_PATH:/github/event.json:ro" \
@@ -23,21 +64,36 @@ docker run --rm \
   -e PR_NUMBER -e BASE_SHA -e HEAD_SHA -e CHECK_RUN_ID \
   -e REVIEW_CONFIG -e REVIEW_SKILLS -e REVIEW_TIMEOUT \
   -e REVIEW_OUTPUT_DIR=/github/out \
+  -e KORZA_CONTRACT_VERSION="$contract_version" \
   "$REVIEW_IMAGE"
 engine_exit=$?
 set -e
+# When the kill-after path fires, timeout kills the docker client and the
+# container outlives it. Remove it before reading what it wrote. (A cancelled
+# job never gets here; the always() cleanup step in action.yml covers that.)
+docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
 
 result="$out_dir/result.json"
 if [ ! -s "$result" ]; then
-  out verdict error
-  msg="Engine exited with $engine_exit and produced no result."
-  printf '%s\n' "$msg" > "$out_dir/summary.md"
-  if [ "$FAIL_ON_ERROR" = "true" ]; then
-    echo "::error::$msg"
-    exit 1
+  # 124: timeout sent TERM and the container exited. 137: the KILL fallback.
+  if [ "$engine_exit" -eq 124 ] || [ "$engine_exit" -eq 137 ]; then
+    engine_error "Engine timed out: no result after ${hard_timeout}s (timeout-seconds $REVIEW_TIMEOUT plus 30s grace)."
   fi
-  echo "::warning::$msg The check reports neutral (fail-on-error is false)."
-  exit 0
+  engine_error "Engine exited with $engine_exit and produced no result."
+fi
+
+# A TERM can land mid-write. Report an unreadable result like any engine error
+# rather than letting jq fail the step under set -e.
+if ! jq -e . "$result" > /dev/null 2>&1; then
+  engine_error "Engine exited with $engine_exit and wrote an unreadable result.json."
+fi
+
+engine_contract="$(jq -r '.contract_version // empty' "$result")"
+if [ -z "$engine_contract" ]; then
+  engine_error "Engine image does not declare a contract_version in result.json; this action implements contract $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
+fi
+if [ "${engine_contract%%.*}" != "$contract_version" ]; then
+  engine_error "Engine image implements contract version $engine_contract; this action implements $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
 fi
 
 verdict="$(jq -r '.verdict.status' "$result")"
