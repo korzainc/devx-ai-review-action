@@ -11,10 +11,6 @@ skip() {
 }
 event() { jq -r "$1" "$GITHUB_EVENT_PATH"; }
 
-# The action can run more than once in a job. Start from a clean output dir so
-# a later step never reports an earlier invocation's result or summary.
-rm -rf "$RUNNER_TEMP/korza-review"
-
 case "$GITHUB_EVENT_NAME" in
   issue_comment)
     [ -n "$(event '.issue.pull_request // empty')" ] || skip "Comment is not on a pull request. Skipping."

@@ -19,6 +19,8 @@ jobs:
           persist-credentials: false
       - name: ShellCheck
         run: shellcheck scripts/*.sh stub-engine/*.sh
+      - name: Wrapper lifecycle tests
+        run: python3 -m unittest discover -s tests -v
       - name: shfmt
         uses: docker://mvdan/shfmt:v3.14.1@sha256:8c06884a35683d8763fba6c0d9484d11a61a96da65f8d497d6f625825a6043f2
         with:

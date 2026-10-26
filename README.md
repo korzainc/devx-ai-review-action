@@ -80,7 +80,14 @@ always completes it, even if the engine crashes or the run is cancelled:
 | No blocking findings | `success` |
 | Blocking findings | `failure` |
 | Review could not complete | `neutral` (or `failure` with `fail-on-error: true`) |
+| Review could not complete, but the engine had reported blocking findings | `failure` |
 | Run cancelled | `cancelled` |
+
+A review only completes when the engine exits 0 and writes a valid `result.json`.
+Anything else (a crash, a timeout, an unreadable or mismatched result) is
+"could not complete": its findings and SARIF are not published. A result that
+says `fail` keeps the check failing even then, so a crash can never open the
+gate; an oversized result from a crashed engine is treated the same way.
 
 Require **AI Code Review** in branch protection or a ruleset. On `pull_request`
 the workflow job also appears as `AI Code Review / review (pull_request)`; don't
@@ -162,9 +169,9 @@ major version means a new action release shipping the matching image.
 itself: finish within it, or time out gracefully and still write a `result.json`
 with `verdict.status: error` and a reason, which gives the PR a precise message.
 The action is the backstop, not the mechanism: 30 seconds past the budget it
-TERMs the container (KILL 20 seconds later). An engine that writes `result.json`
-on TERM has that result used; otherwise the action reports a generic timeout
-error. Either way the check completes, `neutral` by default or `failure` with
+TERMs the container (KILL 20 seconds later). If the engine writes `result.json`
+on TERM, the check shows its reason next to the timeout; otherwise the action
+reports a generic timeout error. Either way the check completes, `neutral` by default or `failure` with
 `fail-on-error: true`. A required check is never left hanging in progress.
 
 If the job is cancelled, a cleanup step removes the engine container, so a

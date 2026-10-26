@@ -138,6 +138,8 @@ runs:
         CHECK_RUN_ID: ${{ steps.prep.outputs.check-run-id }}
         REVIEW_OUTCOME: ${{ steps.review.outcome }}
         VERDICT: ${{ steps.review.outputs.verdict }}
+        OUTPUT_DIR: ${{ steps.review.outputs.output-dir }}
+        BLOCKING_PROCESS_FAILURE: ${{ steps.review.outputs.blocking-process-failure }}
         FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
       run: bash "$GITHUB_ACTION_PATH/scripts/finalize.sh"
 
