@@ -37,9 +37,11 @@ REVIEW_TIMEOUT=$((10#$REVIEW_TIMEOUT))
 
 # Pull before the clock starts, so a slow pull does not eat the engine's
 # budget. An image already on the runner (built earlier in the job) is used as is.
+# The pull gets its own limit, or a stalled registry would hold the check open.
+pull_timeout=300
 if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
-  && ! docker pull --quiet "$REVIEW_IMAGE" > /dev/null; then
-  engine_error "Could not pull engine image $REVIEW_IMAGE."
+  && ! timeout "$pull_timeout" docker pull --quiet "$REVIEW_IMAGE" > /dev/null; then
+  engine_error "Could not pull engine image $REVIEW_IMAGE within ${pull_timeout}s."
 fi
 
 # The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still
@@ -48,6 +50,7 @@ fi
 # --init gives the container a PID 1 that actually dies on SIGTERM.
 hard_timeout=$((REVIEW_TIMEOUT + 30))
 
+start=$SECONDS
 set +e
 timeout --signal=TERM --kill-after=20 "$hard_timeout" \
   docker run --rm --init --name "$ENGINE_CONTAINER" \
@@ -68,6 +71,7 @@ timeout --signal=TERM --kill-after=20 "$hard_timeout" \
   "$REVIEW_IMAGE"
 engine_exit=$?
 set -e
+elapsed=$((SECONDS - start))
 # When the kill-after path fires, timeout kills the docker client and the
 # container outlives it. Remove it before reading what it wrote. (A cancelled
 # job never gets here; the always() cleanup step in action.yml covers that.)
@@ -76,15 +80,20 @@ docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
 result="$out_dir/result.json"
 if [ ! -s "$result" ]; then
   # 124: timeout sent TERM and the container exited. 137: the KILL fallback.
-  if [ "$engine_exit" -eq 124 ] || [ "$engine_exit" -eq 137 ]; then
-    engine_error "Engine timed out: no result after ${hard_timeout}s (timeout-seconds $REVIEW_TIMEOUT plus 30s grace)."
+  # 137 also means a SIGKILL from elsewhere (the OOM killer, or the cleanup
+  # step on a cancelled job), so only call it a timeout if the budget ran out.
+  if { [ "$engine_exit" -eq 124 ] || [ "$engine_exit" -eq 137 ]; } && [ "$elapsed" -ge "$hard_timeout" ]; then
+    engine_error "Engine timed out: no result after ${elapsed}s (timeout-seconds $REVIEW_TIMEOUT plus 30s grace)."
   fi
-  engine_error "Engine exited with $engine_exit and produced no result."
+  if [ "$engine_exit" -eq 137 ]; then
+    engine_error "Engine was killed after ${elapsed}s and produced no result (exit 137, often out of memory)."
+  fi
+  engine_error "Engine exited with $engine_exit after ${elapsed}s and produced no result."
 fi
 
 # A TERM can land mid-write. Report an unreadable result like any engine error
 # rather than letting jq fail the step under set -e.
-if ! jq -e . "$result" > /dev/null 2>&1; then
+if ! jq -e 'type == "object"' "$result" > /dev/null 2>&1; then
   engine_error "Engine exited with $engine_exit and wrote an unreadable result.json."
 fi
 
@@ -94,6 +103,13 @@ if [ -z "$engine_contract" ]; then
 fi
 if [ "${engine_contract%%.*}" != "$contract_version" ]; then
   engine_error "Engine image implements contract version $engine_contract; this action implements $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
+fi
+
+# Checked after the contract version, since another major may change the shape.
+# A wrong shape would otherwise fail jq below, possibly after verdict is set.
+if ! jq -e '(.verdict | type) == "object" and (.verdict.status | type) == "string"
+  and (.findings | type) == "array"' "$result" > /dev/null 2>&1; then
+  engine_error "Engine wrote a result.json without a verdict.status string and a findings array."
 fi
 
 verdict="$(jq -r '.verdict.status' "$result")"
