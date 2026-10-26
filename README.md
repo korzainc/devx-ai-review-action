@@ -1,12 +1,16 @@
 # Korza AI Code Review
 
+This is a local wiring candidate for source review. It has not been merged,
+published, installed in a consumer, or exercised against the reported alpha
+image or a real GitHub/model account. No accepted integrated action SHA exists yet.
+
 On-demand AI code review for pull requests. Comment `/review` on a PR and the
 review runs inside your own CI. Findings appear as review comments on the exact
 lines, and the result shows up as a pass/fail check you can require on protected
 branches.
 
-This repo is public. The review engine is a private image on GHCR, so using the
-action needs pull access to that image (see [Access](#access-to-the-engine-image)).
+This action repository and the review engine image are private. A consumer needs
+separate action-sharing and package pull access before use.
 
 ## Usage
 
@@ -14,6 +18,10 @@ Add [`examples/ai-review.yml`](examples/ai-review.yml) to the consuming repo as
 `.github/workflows/ai-review.yml` and **merge it to the default branch**. GitHub
 only runs `issue_comment` workflows from there, so `/review` does nothing until
 it lands.
+
+Command matching ignores letter case. The supplied caller requires the whole
+comment to be `/review`; the action retains its first-line and optional argument
+handling for custom callers.
 
 ```yaml
 on:
@@ -27,10 +35,6 @@ permissions:
   pull-requests: write
   checks: write
   packages: read
-
-concurrency:
-  group: ai-review-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: true
 
 jobs:
   hint:
@@ -49,11 +53,19 @@ jobs:
             "Comment \`/review\` on this PR for a DevX AI Review. It runs on demand only."
 
   review:
-    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/review')
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/review' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association)
     runs-on: ubuntu-latest
+    concurrency:
+      group: ai-review-${{ github.event.issue.number }}
+      cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: korzainc/devx-ai-review-action@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: korzainc/devx-ai-review-action@REPLACE_WITH_REVIEWED_ACTION_SHA
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
@@ -71,9 +83,9 @@ is fine.
 
 ## The check
 
-The action opens a check run named **AI Code Review** on the PR's head commit as
-soon as the run starts, so the PR shows "In progress" right away. A final step
-always completes it, even if the engine crashes or the run is cancelled:
+After fetching the PR, the action opens a check run named **AI Code Review** on
+the exact fetched head. A final step completes it even if the engine crashes or
+the run is cancelled:
 
 | Outcome | Check conclusion |
 | --- | --- |
@@ -81,13 +93,14 @@ always completes it, even if the engine crashes or the run is cancelled:
 | Blocking findings | `failure` |
 | Review could not complete | `neutral` (or `failure` with `fail-on-error: true`) |
 | Review could not complete, but the engine had reported blocking findings | `failure` |
+| Completed review but publisher delivery unverified | `failure` |
 | Run cancelled | `cancelled` |
 
-A review only completes when the engine exits 0 and writes a valid `result.json`.
-Anything else (a crash, a timeout, an unreadable or mismatched result) is
-"could not complete": its findings and SARIF are not published. A result that
-says `fail` keeps the check failing even then, so a crash can never open the
-gate; an oversized result from a crashed engine is treated the same way.
+A review only completes when the engine exits 0 and writes a valid result and
+typed publisher handoff. Anything else (a crash, a timeout, an unreadable or
+mismatched result) is "could not complete": its findings and SARIF are not
+published. A result that says `fail` keeps the check failing even then, so a
+crash can never open the gate; an oversized crashed result is treated likewise.
 
 Require **AI Code Review** in branch protection or a ruleset. On `pull_request`
 the workflow job also appears as `AI Code Review / review (pull_request)`; don't
@@ -108,6 +121,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `check-name` | `AI Code Review` | Name of the check run to require. |
 | `fail-on-error` | `false` | Report `failure` instead of `neutral` when the review cannot complete. |
 | `timeout-seconds` | `600` | Engine time budget. 30s past it the action sends TERM, then KILL 20s later. |
+| `publish-timeout-seconds` | `120` | Publisher time budget in seconds (1 through 3600), followed by bounded termination and cleanup. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
 
@@ -119,6 +133,8 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `findings` | Number of findings |
 | `sarif-file` | Path to the SARIF file on the runner |
 | `check-run-id` | ID of the check run on the PR head commit |
+| `delivery` | `success` only after a verified summary-comment receipt; otherwise `skipped` or `error` |
+| `summary-url` | Verified summary-comment URL on successful delivery |
 
 ## Access to the engine image
 
@@ -138,10 +154,19 @@ read access to this one package only, so the token can pull nothing else.
 - PR titles, descriptions, and comments are treated as untrusted data, never as instructions.
 - Only the associations in `allowed-associations` can trigger a review by comment.
 - Inputs reach scripts through environment variables, never interpolated into shell.
+- The pilot requires the pinned checkout v7.0.1 shown above, which stores its
+  persisted credential outside the mounted workspace. Keep credentials outside
+  `/workspace`; do not mount the runner's home or whole `RUNNER_TEMP` into the
+  engine. A custom checkout must preserve that boundary before use.
+- Publisher attestation covers comment delivery. The pilot leaves `upload-sarif`
+  disabled. Optional SARIF uses the existing, separate artifact upload path and
+  is not validated by this attestation; enabling it requires a separate review
+  of artifact integrity and attribution to the reviewed head.
 
 ## Engine contract
 
-`scripts/run.sh` runs the image as the runner's UID with:
+`scripts/run.sh` runs the pinned image's `action-review` command as the runner's
+UID with model authority only:
 
 | Mount or variable | Contents |
 | --- | --- |
@@ -149,19 +174,23 @@ read access to this one package only, so the token can pull nothing else.
 | `/github/event.json` | The event payload |
 | `/github/out` (writable) | Where the engine writes its results |
 | `PR_NUMBER`, `BASE_SHA`, `HEAD_SHA` | The PR and the merge-base..head range to review |
-| `CHECK_RUN_ID` | The open check run. The engine may update its output text to show progress, but must not complete it. |
+| `CHECK_RUN_ID` | Identity of the open check run, for logging and correlation only. The review container has no GitHub token and cannot modify it; `finalize.sh` completes it. |
 | `REVIEW_CONFIG`, `REVIEW_SKILLS`, `REVIEW_TIMEOUT` | From the action inputs |
-| `KORZA_CONTRACT_VERSION` | The contract version this action implements, currently `1` |
+| `KORZA_CONTRACT_VERSION` | The action contract major version, currently `1` |
 
-The engine writes `result.json` (a `ReviewResult`) and optionally `results.sarif`
-to `/github/out`, and posts review comments itself. It must not assume a home
-directory or a writable `/workspace`. Anything beyond this is a contract change.
+The engine writes versioned `result.json`, typed `publish/result.json` and
+`publish/snapshot.json`, and optionally `results.sarif`. After a zero process
+exit and a completed pass/fail result, the host validates the handoff and records
+its hashes and frozen identity outside the engine mount. Only then does
+`scripts/publish.sh` stage the two typed files and invoke `action-publish` with
+GitHub authority. A completed blocking fail is still publishable; a crash,
+invalid handoff, cancelled run or unverified publisher receipt cannot produce a
+successful check. Publication can be partial, so the wrapper does not retry it.
+The engine must not assume a home directory or writable `/workspace`.
 
-`result.json` must carry a top-level `contract_version` stating the major
-contract version the engine implements. The action refuses a result whose major
-version it does not speak and reports it like any engine error, so a mismatched
-action/image pair fails with a clear message instead of misbehaving. Bumping the
-major version means a new action release shipping the matching image.
+The top action result accepts the supported major-1 contract forms (including
+`1` and `1.4`). The host completion manifest and typed publisher schema versions
+remain exactly integer `1`.
 
 ### Timeouts
 
@@ -177,8 +206,13 @@ reports a generic timeout error. Either way the check completes, `neutral` by de
 If the job is cancelled, a cleanup step removes the engine container, so a
 hung engine does not keep running on a self-hosted runner.
 
+Review budgets retain base-10 leading-zero normalization and the upstream
+600-second fallback for nonnumeric input. This integration bounds the normalized
+budget to 1 through 3600 seconds and rejects zero, out-of-range or oversized
+integers before arithmetic. Publisher budgets remain strict 1 through 3600.
+
 ## Versioning
 
-Each release pins the engine image by digest in `action.yml` and is tagged
-`vX.Y.Z`, with a moving `v1` tag. A skill moving from advisory to blocking ships as
-a new image, so it always arrives as a new release.
+The candidate uses the reported alpha image digest as a source configuration
+input. Its runtime contents and grants are unverified. A consumer must pin a
+reviewed, accepted action commit after integration; no `v1` release exists.

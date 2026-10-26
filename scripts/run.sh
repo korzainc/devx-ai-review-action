@@ -6,39 +6,23 @@ set -euo pipefail
 
 out() { echo "$1=$2" >> "$GITHUB_OUTPUT"; }
 out_dir="$(mktemp -d "$RUNNER_TEMP/korza-review.XXXXXX")"
+control_dir="$(mktemp -d "$RUNNER_TEMP/korza-control.XXXXXX")"
+engine_container="${ENGINE_CONTAINER:-korza-${out_dir##*/}}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+summary_file="$control_dir/summary.md"
 # Private step output: finalization must read only this invocation's files.
 # Keep the directory until later steps have uploaded any completed SARIF.
 out output-dir "$out_dir"
+out summary-file "$summary_file"
+out result-file "$control_dir/result.json"
+out engine-container "$engine_container"
 out verdict error
 
-# The engine contract this action implements (mounts, env, result.json shape).
-# The engine states the major version it implements in result.json, so a
-# mismatched action/image pair fails loudly instead of misbehaving.
-contract_version=1
-
-# The engine can leave anything in out_dir, including a symlink to a runner
-# file. Remove whatever is at the path before the host writes there.
-write_summary() {
-  rm -rf "$out_dir/summary.md"
-  cat > "$out_dir/summary.md"
-  cat "$out_dir/summary.md" >> "$GITHUB_STEP_SUMMARY"
-}
-
-# Workflow commands are line based, so engine text must not start a new one.
-# Escape the way the runner unescapes.
-annotation() {
-  local s="$1"
-  s="${s//'%'/%25}"
-  s="${s//$'\r'/%0D}"
-  printf '%s' "${s//$'\n'/%0A}"
-}
-
-# The review could not complete. Write the error everywhere it is read from,
-# then let fail-on-error (or a known blocking result) decide the step.
 incomplete() {
   local msg="$1"
-  local detail="${2:-$1}"
-  printf '### AI Code Review: error\n\n%s\n' "$detail" | write_summary
+  local detail="${2:-$msg}"
+  printf '### AI Code Review: error\n\n%s\n' "$detail" > "$summary_file"
+  cat "$summary_file" >> "$GITHUB_STEP_SUMMARY"
   if [ "$FAIL_ON_ERROR" = "true" ] || [ "${blocking_process_failure:-false}" = "true" ]; then
     echo "::error::$msg"
     exit 1
@@ -47,74 +31,69 @@ incomplete() {
   exit 0
 }
 
-# A result that says fail keeps the merge gate closed, whatever happens next.
-mark_blocking() {
-  blocking_process_failure=true
-  out blocking-process-failure true
-}
-
+if [[ ! "$REVIEW_IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
+  incomplete "Engine image must be pinned by SHA-256."
+fi
+# Preserve upstream fallback and base-10 leading-zero normalization. Bound the
+# significant digits before arithmetic so an oversized integer cannot wrap.
 case "$REVIEW_TIMEOUT" in
   '' | *[!0-9]*)
-    echo "::warning::timeout-seconds '$REVIEW_TIMEOUT' is not a number. Using 600."
+    echo "::warning::timeout-seconds is not a number. Using 600."
     REVIEW_TIMEOUT=600
     ;;
 esac
-# Force base 10, or a leading zero reads as octal ("0600" is 384, "09" aborts).
-REVIEW_TIMEOUT=$((10#$REVIEW_TIMEOUT))
-
-# Pull before the clock starts, so a slow pull does not eat the engine's
-# budget. An image already on the runner (built earlier in the job) is used as is.
-# The pull gets its own limit, or a stalled registry would hold the check open.
-pull_timeout=300
-if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
-  && ! timeout "$pull_timeout" docker pull --quiet "$REVIEW_IMAGE" > /dev/null; then
-  incomplete "Could not pull engine image $REVIEW_IMAGE within ${pull_timeout}s."
+timeout_digits="${REVIEW_TIMEOUT#"${REVIEW_TIMEOUT%%[!0]*}"}"
+if [ -z "$timeout_digits" ] || [ "${#timeout_digits}" -gt 4 ]; then
+  incomplete "timeout-seconds must be 1 through 3600."
 fi
+REVIEW_TIMEOUT=$((10#$timeout_digits))
+if [ "$REVIEW_TIMEOUT" -gt 3600 ]; then
+  incomplete "timeout-seconds must be 1 through 3600."
+fi
+export REVIEW_TIMEOUT
+REVIEW_IMAGE_DIGEST="sha256:${REVIEW_IMAGE##*@sha256:}"
+export REVIEW_IMAGE_DIGEST
 
-# The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still
-# write a result) on its own; this wrapper is the backstop that keeps a hung
-# engine from holding the job, and the check, until the 6 hour job limit.
-# --init gives the container a PID 1 that actually dies on SIGTERM.
+# Pull has an independent bound; do not spend the engine's budget on registry I/O.
+if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
+  && ! timeout 300 docker pull --quiet "$REVIEW_IMAGE" > /dev/null; then
+  incomplete "Could not pull engine image within 300s."
+fi
 hard_timeout=$((REVIEW_TIMEOUT + 30))
-
 start=$SECONDS
 set +e
 timeout --signal=TERM --kill-after=20 "$hard_timeout" \
-  docker run --rm --init --name "$ENGINE_CONTAINER" \
+env -u GITHUB_TOKEN -u GH_TOKEN -u REGISTRY_TOKEN docker run --rm --init --name "$engine_container" \
   --user "$(id -u):$(id -g)" \
   -v "$GITHUB_WORKSPACE:/workspace:ro" \
   -v "$GITHUB_EVENT_PATH:/github/event.json:ro" \
   -v "$out_dir:/github/out" \
   -w /workspace \
   -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/workspace \
-  -e ANTHROPIC_API_KEY -e GITHUB_TOKEN \
+  -e ANTHROPIC_API_KEY \
   -e GITHUB_REPOSITORY -e GITHUB_EVENT_NAME -e GITHUB_SERVER_URL -e GITHUB_API_URL \
   -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT \
   -e GITHUB_EVENT_PATH=/github/event.json \
   -e PR_NUMBER -e BASE_SHA -e HEAD_SHA -e CHECK_RUN_ID \
   -e REVIEW_CONFIG -e REVIEW_SKILLS -e REVIEW_TIMEOUT \
+  -e KORZA_CONTRACT_VERSION=1 -e REVIEW_IMAGE_DIGEST \
   -e REVIEW_OUTPUT_DIR=/github/out \
-  -e KORZA_CONTRACT_VERSION="$contract_version" \
-  "$REVIEW_IMAGE"
+  "$REVIEW_IMAGE" action-review
 engine_exit=$?
 set -e
 elapsed=$((SECONDS - start))
-# When the kill-after path fires, timeout kills the docker client and the
-# container outlives it. Remove it before reading what it wrote. (A cancelled
-# job never gets here; the always() cleanup step in action.yml covers that.)
-docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
+timeout --signal=TERM --kill-after=5 10 docker rm -f "$engine_container" > /dev/null 2>&1 || true
 
-result="$out_dir/result.json"
-# Only a regular file is read: never follow an engine-created symlink.
-usable_result() { [ -f "$result" ] && [ ! -L "$result" ] && [ -s "$result" ]; }
-# Exactly one JSON object, so a concatenated stream is never half trusted.
-single_object() { jq -e -s 'length == 1 and (.[0] | type) == "object"' "$result" > /dev/null 2>&1; }
-says_fail() { jq -e '.verdict.status == "fail"' "$result" > /dev/null 2>&1; }
-
+engine_result="$out_dir/result.json"
+top_status="$(env -i PATH="$PATH" python3 "$script_dir/inspect.py" "$engine_result")"
 if [ "$engine_exit" -ne 0 ]; then
-  # 124: timeout sent TERM and the container exited. 137: the KILL fallback.
-  # 137 also means a SIGKILL from elsewhere (the OOM killer, or the cleanup
-  # step on a cancelled job), so only call it a timeout if the budget ran out.
+  # A crash is never a completed review. Preserve the existing blocking gate
+  # if this invocation left a fail result, without publishing its artifacts.
+  # A valid fail or an oversized unknown result remains blocking on a crash.
+  if [ "$top_status" = "fail" ] || [ "$top_status" = "oversized" ]; then
+    blocking_process_failure=true
+    out blocking-process-failure true
+  fi
   if { [ "$engine_exit" -eq 124 ] || [ "$engine_exit" -eq 137 ]; } && [ "$elapsed" -ge "$hard_timeout" ]; then
     msg="Engine timed out after ${elapsed}s (timeout-seconds $REVIEW_TIMEOUT plus 30s grace)."
   elif [ "$engine_exit" -eq 137 ]; then
@@ -124,52 +103,33 @@ if [ "$engine_exit" -ne 0 ]; then
   fi
   msg="$msg The review could not complete."
   detail="$msg"
-  # A crash is never a completed review, so nothing it wrote is published.
-  # Still keep the blocking gate if it left a fail result, and show the
-  # engine's own reason (a graceful timeout writes one on TERM). Oversized
-  # output is refused conservatively, without parsing it on the host.
-  if usable_result; then
-    if [ "$(wc -c < "$result")" -gt 1048576 ]; then
-      mark_blocking
-      incomplete "$msg It left an oversized result, which is treated as blocking."
-    fi
-    if single_object; then
-      if says_fail; then mark_blocking; fi
-      reason="$(jq -r '.verdict.reason | strings' "$result" 2> /dev/null || true)"
-      if [ -n "$reason" ]; then detail="$(printf '%s\n\nThe engine reported: %s' "$msg" "$reason")"; fi
-    fi
-  fi
+  reason="$(env -i PATH="$PATH" python3 "$script_dir/inspect.py" "$engine_result" --reason)"
+  if [ -n "$reason" ]; then detail="$(printf '%s\n\nThe engine reported: %s' "$msg" "$reason")"; fi
   incomplete "$msg" "$detail"
 fi
 
-if ! usable_result; then
-  incomplete "Engine exited with 0 after ${elapsed}s and produced no usable result."
+case "$top_status" in
+  pass | fail) ;;
+  error)
+    reason="$(env -i PATH="$PATH" python3 "$script_dir/inspect.py" "$engine_result" --reason)"
+    incomplete "Engine reported an error. The review could not complete." "${reason:-The review could not complete.}"
+    ;;
+  *) incomplete "Engine produced an invalid result. The review could not complete." ;;
+esac
+if [ "$top_status" = "fail" ]; then
+  # Retain the blocking gate even if later validation or rendering fails.
+  blocking_process_failure=true
+  out blocking-process-failure true
 fi
-if ! single_object; then
-  incomplete "Engine wrote an unreadable result.json. The review could not complete."
+if ! completion_file="$(env -i PATH="$PATH" python3 "$script_dir/complete.py" \
+  --output-dir "$out_dir" --control-dir "$control_dir" \
+  --repository "$GITHUB_REPOSITORY" --pr-number "$PR_NUMBER" \
+  --head-sha "$HEAD_SHA" --merge-base-sha "$BASE_SHA" --image "$REVIEW_IMAGE" \
+  --github-run-id "$GITHUB_RUN_ID" --github-run-attempt "$GITHUB_RUN_ATTEMPT")"; then
+  incomplete "Engine produced an invalid completed handoff or unsupported action contract. The review could not complete."
 fi
-# Retain the blocking gate even if a later check or rendering fails.
-if says_fail; then mark_blocking; fi
-
-engine_contract="$(jq -r '.contract_version // empty | tostring' "$result")"
-if [ -z "$engine_contract" ]; then
-  incomplete "Engine image does not declare a contract_version in result.json; this action implements contract $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
-fi
-if [ "${engine_contract%%.*}" != "$contract_version" ]; then
-  incomplete "Engine image implements contract version $engine_contract; this action implements $contract_version. Use the action release that ships this image, or an image built for contract $contract_version."
-fi
-
-if ! jq -e '.verdict.status | . == "pass" or . == "fail" or . == "error"' "$result" > /dev/null 2>&1; then
-  incomplete "Engine produced an invalid result. The review could not complete."
-fi
-verdict="$(jq -r '.verdict.status' "$result")"
-if [ "$verdict" = "error" ]; then
-  incomplete "Engine reported an error. The review could not complete." \
-    "$(jq -r '.verdict.reason // "The review could not complete."' "$result")"
-fi
-if ! jq -e '.findings | type == "array"' "$result" > /dev/null 2>&1; then
-  incomplete "Engine produced invalid findings. The review could not complete."
-fi
+result="$control_dir/result.json"
+verdict="$top_status"
 findings="$(jq -r '.findings | length' "$result")"
 finding_rows=""
 if [ "$findings" -gt 0 ]; then
@@ -179,25 +139,43 @@ if [ "$findings" -gt 0 ]; then
     incomplete "Engine produced invalid findings. The review could not complete."
   fi
 fi
-reason="$(jq -r '.verdict.reason' "$result")"
 
 {
   echo "### AI Code Review: $verdict"
   echo
-  printf '%s\n' "$reason"
+  jq -r '.verdict.reason' "$result"
   echo
   if [ "$findings" -gt 0 ]; then
     echo "| Severity | Rule | Location | Blocking |"
     echo "| --- | --- | --- | --- |"
     printf '%s\n' "$finding_rows"
   fi
-} | write_summary
+} > "$summary_file"
+cat "$summary_file" >> "$GITHUB_STEP_SUMMARY"
+out completion-file "$completion_file"
+out review-completed true
 out verdict "$verdict"
 out findings "$findings"
-sarif="$out_dir/results.sarif"
-if [ -f "$sarif" ] && [ ! -L "$sarif" ] && [ -s "$sarif" ]; then out sarif-file "$sarif"; fi
+if [ -f "$out_dir/results.sarif" ] && [ ! -L "$out_dir/results.sarif" ] &&
+   [ -s "$out_dir/results.sarif" ]; then out sarif-file "$out_dir/results.sarif"; fi
 
-if [ "$verdict" = "fail" ]; then
-  echo "::error::AI Code Review failed: $(annotation "$reason")"
-  exit 1
-fi
+case "$verdict" in
+  pass) exit 0 ;;
+  fail)
+    # Workflow commands are line based; preserve the reason as one escaped value.
+    reason="$(jq -r '.verdict.reason' "$result")"
+    reason="${reason//'%'/%25}"
+    reason="${reason//$'\r'/%0D}"
+    reason="${reason//$'\n'/%0A}"
+    echo "::error::AI Code Review failed: $reason"
+    exit 1
+    ;;
+  *)
+    if [ "$FAIL_ON_ERROR" = "true" ]; then
+      echo "::error::AI Code Review ended with verdict: $verdict"
+      exit 1
+    fi
+    echo "::warning::AI Code Review ended with verdict: $verdict. The check reports neutral."
+    exit 0
+    ;;
+esac
