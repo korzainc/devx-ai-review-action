@@ -58,9 +58,14 @@ case "$REVIEW_TIMEOUT" in
     REVIEW_TIMEOUT=600
     ;;
 esac
-# Force base 10, or a leading zero reads as octal ("0600" is 384, "09" aborts).
-REVIEW_TIMEOUT=$((10#$REVIEW_TIMEOUT))
-if [ "$REVIEW_TIMEOUT" -lt 1 ] || [ "$REVIEW_TIMEOUT" -gt 3600 ]; then
+# Bound significant digits before Bash arithmetic can wrap an oversized value.
+# Strip leading zeros first to preserve base-10 inputs such as "0600" and "09".
+timeout_digits="${REVIEW_TIMEOUT#"${REVIEW_TIMEOUT%%[!0]*}"}"
+if [ -z "$timeout_digits" ] || [ "${#timeout_digits}" -gt 4 ]; then
+  incomplete "timeout-seconds must be 1 through 3600."
+fi
+REVIEW_TIMEOUT=$((10#$timeout_digits))
+if [ "$REVIEW_TIMEOUT" -gt 3600 ]; then
   incomplete "timeout-seconds must be 1 through 3600."
 fi
 

@@ -105,6 +105,29 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
     def outputs(self):
         return dict(line.split("=", 1) for line in (self.root / "outputs").read_text().splitlines())
 
+    def test_oversized_timeout_cannot_wrap_into_an_allowed_budget(self):
+        # On 64-bit Bash the oversized value wraps to 600 before validation.
+        for value in ("0", "0000", "3601", "18446744073709552216"):
+            with self.subTest(value=value):
+                self.env["REVIEW_TIMEOUT"] = value
+                run = self.review()
+                self.assertIn("timeout-seconds must be 1 through 3600", run.stdout)
+                self.assertEqual(self.outputs()["verdict"], "error")
+                self.assertNotIn("review-completed", self.outputs())
+                self.assertFalse((self.root / "analysis-calls").exists())
+
+    def test_timeout_keeps_base_ten_leading_zero_normalization(self):
+        for value, expected in [("1", "1"), ("3600", "3600"), ("09", "9"), ("0000000600", "600")]:
+            with self.subTest(value=value):
+                self.env["REVIEW_TIMEOUT"] = value
+                (self.root / "analysis-calls").unlink(missing_ok=True)
+                run = self.review()
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                self.assertEqual(self.outputs()["review-completed"], "true")
+                calls = [json.loads(x) for x in (self.root / "analysis-calls").read_text().splitlines()]
+                engine = next(c for c in calls if "run" in c["args"])
+                self.assertEqual(engine["env"]["REVIEW_TIMEOUT"], expected)
+
     def test_completed_pass_has_host_manifest_and_private_analysis_authority(self):
         run = self.review()
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)

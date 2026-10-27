@@ -109,6 +109,14 @@ class LifecycleTests(unittest.TestCase):
             "FAKE_RESULT": "", "FAKE_EXIT": "0", "FAKE_SARIF": "", "FAKE_KIND": "file",
             "FAKE_PULL_EXIT": "0", "FAKE_PLANT": "",
         }
+        if sys.platform == "darwin":
+            # Model the command boundary on macOS, which lacks GNU timeout.
+            # Deadline/process-group behavior requires separate native checks.
+            self.executable("timeout", '''import os, sys
+args = sys.argv[1:]
+while args[0].startswith("--"): args = args[1:]
+os.execvp(args[1], args[1:])
+''')
         self.executable("docker", DOCKER_PRELUDE + '''
 assert os.environ["GITHUB_WORKSPACE"] + ":/workspace:ro" in mounts
 assert os.environ["GITHUB_EVENT_PATH"] + ":/github/event.json:ro" in mounts
