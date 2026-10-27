@@ -27,9 +27,10 @@ def github_expression(expression, values, *, allowed_functions):
     # Expression string literals have no escape sequences: '\n' stays a backslash and
     # an n (fromJSON then decodes it). Parse them as Python raw strings to match.
     expression = re.sub(r"'([^']*)'", r"r'\1'", expression)
+    expression = re.sub(r"!(?!=)", " not ", expression)
     tree = ast.parse(expression.replace("&&", " and ").replace("||", " or "), mode="eval")
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or,
+        if not isinstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
                                 ast.Compare, ast.Eq, ast.Call, ast.Name, ast.Load,
                                 ast.Attribute, ast.Constant)):
             raise AssertionError("unsupported expression node: " + type(node).__name__)
@@ -440,8 +441,8 @@ pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdi
                 self.assertEqual(payload["conclusion"], expected)
         self.assertEqual(len((self.root / "cleanup-timeouts").read_text().splitlines()), 4)
 
-    def test_both_copyable_callers_gate_cancellation_on_exact_authorized_command(self):
-        readme = (ROOT / "README.md").read_text().split("```yaml\n", 1)[1].split("```", 1)[0]
+    def test_composite_and_reusable_workflows_gate_cancellation_on_exact_authorized_command(self):
+        reusable = (ROOT / ".github/workflows/ai-review.yml").read_text()
         example = (ROOT / "examples/ai-review.yml").read_text()
         cases = [("issue_comment", "/review", role, True) for role in ("OWNER", "MEMBER", "COLLABORATOR")]
         # The comment box submits a trailing newline when the author presses Enter.
@@ -451,7 +452,7 @@ pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdi
                   (("/review", "CONTRIBUTOR"), ("/review invalid", "MEMBER"),
                    ("/reviewdog", "MEMBER"), ("ordinary comment", "MEMBER"))]
         cases.append(("pull_request", "/review", "MEMBER", False))
-        for source, text in (("README", readme), ("example", example)):
+        for source, text in (("reusable", reusable), ("example", example)):
             review = text.split("  review:\n", 1)[1]
             lines = review.splitlines()
             index = next(i for i, line in enumerate(lines) if line.startswith("    if:"))

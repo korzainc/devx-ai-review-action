@@ -15,20 +15,16 @@ action needs pull access to that image (see [Access](#access-to-the-engine-image
 
 ## Usage
 
-Add [`examples/ai-review.yml`](examples/ai-review.yml) to the consuming repo as
-`.github/workflows/ai-review.yml` and **merge it to the default branch**. GitHub
-only runs `issue_comment` workflows from there, so `/review` does nothing until
-it lands.
-
-Command matching ignores letter case. The supplied caller requires the whole
-comment to be `/review`; the action retains its first-line and optional argument
-handling for custom callers.
+Add [`examples/ai-review-reusable.yml`](examples/ai-review-reusable.yml) as
+`.github/workflows/ai-review.yml` and **merge it to the default branch**. The shared
+workflow keeps the one-time PR hint, authorization, checkout and review steps in
+this repository. Only `/review` comments run the engine.
 
 ```yaml
 on:
   issue_comment:
     types: [created]
-  pull_request:          # only for the one-time /review hint
+  pull_request:
     types: [opened, ready_for_review]
 
 permissions:
@@ -38,41 +34,35 @@ permissions:
   packages: read
 
 jobs:
-  hint:
-    if: >-
-      github.event_name == 'pull_request' &&
-      ((github.event.action == 'opened' && !github.event.pull_request.draft) ||
-       github.event.action == 'ready_for_review') &&
-      github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body \
-            "Comment \`/review\` on this PR for a DevX AI Review. It runs on demand only."
-
   review:
-    if: >-
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-               github.event.comment.author_association)
-    runs-on: ubuntu-latest
-    concurrency:
-      group: ai-review-${{ github.event.issue.number }}
-      cancel-in-progress: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: korzainc/devx-ai-review-action@pre-release
-        with:
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@pre-release
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 ```
 
-The action fetches the PR's base and head itself, so the default shallow checkout
-is fine.
+`pre-release` is a moving trial branch. Pin the reusable workflow to a full
+reviewed commit SHA for a stable rollout; its composite action automatically
+uses that same revision. This requires GitHub.com runners 2.336.0 or newer and
+uses hosted `ubuntu-latest`.
+
+The `ANTHROPIC_API_KEY` secret belongs to the consuming repository (or an org
+secret available to it). No key is needed to post the hint; a review needs it.
+The shared workflow accepts optional `config`, `skills`, `timeout-seconds`,
+`fail-on-error` and `check-name` inputs under `with:`. Their defaults match the
+action below. `job-timeout-minutes` bounds the whole job, including preparation
+and publication; it defaults to GitHub’s standard 360 minutes. Keep it above
+the engine budget plus image-pull and publishing time. Existing consumers can
+preserve their check name and shorter job deadline with these inputs.
+`concurrency-prefix` defaults to `ai-review`; retain an existing prefix when
+migrating so a new review can still cancel an older run on the same PR.
+
+For custom registry credentials, other triggers or SARIF uploads, use the
+[full composite example](examples/ai-review.yml) and its inputs. The action
+fetches the PR's base and head itself, so the default shallow checkout is fine.
+
+Command matching ignores letter case. Both supplied workflows accept `/review`
+with an optional trailing LF or CRLF. Custom composite callers can use its
+first-line and optional argument handling.
 
 ## Events
 
