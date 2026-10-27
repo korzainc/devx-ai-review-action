@@ -113,8 +113,8 @@ elapsed=$((SECONDS - start))
 timeout --signal=TERM --kill-after=5 10 docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
 
 engine_result="$out_dir/result.json"
-top_status="$(env -i PATH="$PATH" python3 "$script_dir/inspect.py" "$engine_result")"
-engine_reason() { env -i PATH="$PATH" python3 "$script_dir/inspect.py" --reason "$engine_result"; }
+top_status="$(env -i PATH="$PATH" python3 "$script_dir/inspect_result.py" "$engine_result")"
+engine_reason() { env -i PATH="$PATH" python3 "$script_dir/inspect_result.py" --reason "$engine_result"; }
 
 if [ "$engine_exit" -ne 0 ]; then
   # 124: timeout sent TERM and the container exited. 137: the KILL fallback.

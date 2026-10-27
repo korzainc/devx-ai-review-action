@@ -105,6 +105,14 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
     def outputs(self):
         return dict(line.split("=", 1) for line in (self.root / "outputs").read_text().splitlines())
 
+    def test_contract_cli_can_construct_its_argument_parser(self):
+        # Python 3.14's argparse imports inspect through its color formatter.
+        # Helpers beside this script must not shadow the standard library.
+        run = subprocess.run([sys.executable, str(ROOT / "scripts/contract.py"), "--help"],
+                             env=self.env, text=True, capture_output=True, timeout=8)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        self.assertIn("usage:", run.stdout)
+
     def test_oversized_timeout_cannot_wrap_into_an_allowed_budget(self):
         # On 64-bit Bash the oversized value wraps to 600 before validation.
         for value in ("0", "0000", "3601", "18446744073709552216"):
