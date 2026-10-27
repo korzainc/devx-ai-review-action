@@ -12,6 +12,10 @@ on:
         description: Optional comma-separated skills; otherwise use the review config.
         type: string
         default: ""
+      registry-username:
+        description: GHCR token owner; defaults to the triggering actor when omitted.
+        type: string
+        default: ""
       timeout-seconds:
         description: Engine time budget, from 1 through 3600 seconds.
         type: string
@@ -35,6 +39,9 @@ on:
     secrets:
       ANTHROPIC_API_KEY:
         description: Anthropic key used only by the review engine.
+        required: false
+      REGISTRY_TOKEN:
+        description: Optional pull-only GHCR credential when the job token cannot access the engine image.
         required: false
 
 permissions:
@@ -102,6 +109,8 @@ jobs:
       - uses: $/
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          registry-token: ${{ secrets.REGISTRY_TOKEN || github.token }}
+          registry-username: ${{ inputs.registry-username || github.actor }}
           config: ${{ inputs.config }}
           skills: ${{ inputs.skills }}
           timeout-seconds: ${{ inputs.timeout-seconds }}

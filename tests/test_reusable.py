@@ -1,6 +1,7 @@
 """Offline checks of the reusable workflow's authorization and hint boundary."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -17,6 +18,49 @@ ROOT = Path(__file__).resolve().parents[1]
 class ReusableTests(unittest.TestCase):
     def workflow(self):
         return (ROOT / ".github/workflows/ai-review.yml").read_text()
+
+    def test_registry_credentials_reach_login_with_independent_defaults(self):
+        source = self.workflow()
+        review = source.split("  review:\n", 1)[1]
+        forwarded = dict(re.findall(r"^          ([a-z-]+): (.+)$", review, re.M))
+        self.assertIn("registry-token", forwarded)
+        self.assertIn("registry-username", forwarded)
+        self.assertNotIn("image", forwarded)
+        self.assertNotIn("github-token", forwarded)
+        self.assertIn("      REGISTRY_TOKEN:\n", source)
+        self.assertIn("        required: false", source.split("      REGISTRY_TOKEN:\n", 1)[1])
+        metadata = (ROOT / "action.yml").read_text()
+        login = metadata.split("    - name: Log in to GHCR\n", 1)[1].split("    - name:", 1)[0]
+        command = login.split("      run: ", 1)[1].strip()
+        self.assertIn("REGISTRY_TOKEN: ${{ inputs.registry-token }}", login)
+        self.assertIn("REGISTRY_USERNAME: ${{ inputs.registry-username }}", login)
+        for supplied_token, supplied_user in (("", ""), ("registry-fixture", "robot fixture"),
+                                               ("registry-fixture", ""), ("", "robot fixture")):
+            with self.subTest(token_set=bool(supplied_token), username_set=bool(supplied_user)):
+                values = {"secrets": SimpleNamespace(REGISTRY_TOKEN=supplied_token),
+                          "inputs": SimpleNamespace(registry_username=supplied_user),
+                          "github": SimpleNamespace(token="job-fixture", actor="actor-fixture")}
+                def resolve(name):
+                    expression = forwarded[name][3:-3].replace("inputs.registry-username", "inputs.registry_username")
+                    return github_expression(expression, values, allowed_functions={})
+                with tempfile.TemporaryDirectory() as directory:
+                    base = Path(directory)
+                    docker = base / "docker"
+                    docker.write_text("#!" + sys.executable + "\n" +
+                        "import json, os, pathlib, sys\n" +
+                        "pathlib.Path(os.environ['LOGIN_RECEIPT']).write_text(json.dumps([sys.argv[1:], sys.stdin.read()]))\n")
+                    docker.chmod(0o755)
+                    env = dict(os.environ, PATH=str(base) + os.pathsep + os.environ["PATH"],
+                               REGISTRY_TOKEN=resolve("registry-token"),
+                               REGISTRY_USERNAME=resolve("registry-username"),
+                               LOGIN_RECEIPT=str(base / "receipt"))
+                    run = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", command],
+                                         env=env, text=True, capture_output=True, timeout=5)
+                    self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                    args, password = json.loads((base / "receipt").read_text())
+                    self.assertEqual(args, ["login", "ghcr.io", "-u", supplied_user or "actor-fixture", "--password-stdin"])
+                    self.assertEqual(password, supplied_token or "job-fixture")
+                    self.assertEqual(run.stdout + run.stderr, "")
 
     def test_only_authorized_pr_commands_can_enter_cancelling_job(self):
         source = self.workflow()

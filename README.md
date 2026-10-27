@@ -56,9 +56,36 @@ preserve their check name and shorter job deadline with these inputs.
 `concurrency-prefix` defaults to `ai-review`; retain an existing prefix when
 migrating so a new review can still cancel an older run on the same PR.
 
-For custom registry credentials, other triggers or SARIF uploads, use the
-[full composite example](examples/ai-review.yml) and its inputs. The action
-fetches the PR's base and head itself, so the default shallow checkout is fine.
+For a repository whose job token cannot pull the engine image, add an optional
+`REGISTRY_TOKEN` secret and `registry-username` input to the same short caller:
+
+```yaml
+    with:
+      registry-username: korza-registry-bot
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      REGISTRY_TOKEN: ${{ secrets.KORZA_REGISTRY_TOKEN }}
+```
+
+Use the token owner's username and a pull-only credential with access to this
+package. If omitted or empty, these settings independently fall back to
+`github.token` and `github.actor`, preserving the default caller. The registry
+credential is used for GHCR login; it does not replace the token that reads the
+PR or posts reviews. Pass secrets by name rather than inheriting unrelated ones.
+
+The action repository is public, so cross-org callers can reference the shared
+workflow. Their Actions policy must allow it and the actions it uses. Image
+access remains separate; see [Access](#access-to-the-engine-image).
+
+The short workflow deliberately keeps the image pin, command grammar, allowed
+roles and publisher defaults in the action repository. For custom triggers or
+roles, a custom GitHub API token, publisher budgets, an image override for
+testing, SARIF or action outputs, use the [full composite example](examples/ai-review.yml)
+and its inputs. Those capabilities remain available; they are not forwarded by
+the short workflow. SARIF also needs an explicit permission grant and correct
+reviewed-commit attribution. Custom runners and extra same-job steps likewise
+use the full action. The action fetches the PR's base and head itself, so the
+default shallow checkout is fine.
 
 Command matching ignores letter case. Both supplied workflows accept `/review`
 with an optional trailing LF or CRLF. Custom composite callers can use its
