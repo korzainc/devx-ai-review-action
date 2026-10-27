@@ -58,6 +58,7 @@ jobs:
     # On demand only: a /review comment on a PR (reviews cost model tokens).
     # Check the command and association before concurrency can cancel another run.
     if: >-
+      !cancelled() &&
       github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
       contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&

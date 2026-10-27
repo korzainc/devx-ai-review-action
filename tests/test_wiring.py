@@ -28,7 +28,7 @@ def github_expression(expression, values, *, allowed_functions):
     # an n (fromJSON then decodes it). Parse them as Python raw strings to match.
     expression = re.sub(r"'([^']*)'", r"r'\1'", expression)
     expression = re.sub(r"!(?!=)", " not ", expression)
-    tree = ast.parse(expression.replace("&&", " and ").replace("||", " or "), mode="eval")
+    tree = ast.parse(expression.replace("&&", " and ").replace("||", " or ").strip(), mode="eval")
     for node in ast.walk(tree):
         if not isinstance(node, (ast.Expression, ast.BoolOp, ast.And, ast.Or, ast.UnaryOp, ast.Not,
                                 ast.Compare, ast.Eq, ast.Call, ast.Name, ast.Load,
@@ -468,6 +468,7 @@ pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdi
                     eligible = github_expression(expression, {"github": github}, allowed_functions={
                         "contains": lambda values, item: any(github_equal(value, item) for value in values),
                         "fromJSON": json.loads,
+                        "cancelled": lambda: False,
                         "startsWith": lambda value, prefix: value.lower().startswith(prefix.lower())})
                     can_cancel = "\nconcurrency:" in text or (eligible and "\n    concurrency:" in review)
                     self.assertEqual(bool(eligible), expected)

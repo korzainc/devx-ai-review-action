@@ -37,8 +37,16 @@ class ReusableTests(unittest.TestCase):
                     comment=SimpleNamespace(body=command, author_association=role)))
                 admitted = github_expression(expression, {"github": github}, allowed_functions={
                     "contains": lambda values, item: any(github_equal(v, item) for v in values),
-                    "fromJSON": json.loads})
+                    "fromJSON": json.loads, "cancelled": lambda: False})
                 self.assertEqual(bool(admitted), expected)
+        # A replacement review must stop this job on cancellation re-evaluation.
+        github = SimpleNamespace(event_name="issue_comment", event=SimpleNamespace(
+            issue=SimpleNamespace(pull_request=True),
+            comment=SimpleNamespace(body="/review", author_association="MEMBER")))
+        admitted = github_expression(expression, {"github": github}, allowed_functions={
+            "contains": lambda values, item: any(github_equal(v, item) for v in values),
+            "fromJSON": json.loads, "cancelled": lambda: True})
+        self.assertFalse(admitted)
         self.assertNotIn("\nconcurrency:", source)
         self.assertIn("    concurrency:\n", review)
 
