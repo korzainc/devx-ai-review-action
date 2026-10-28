@@ -79,6 +79,74 @@ if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
   incomplete "Could not pull engine image $REVIEW_IMAGE. Check that this repo has read access to the package (or pass registry-token); a pull also gives up after ${pull_timeout}s."
 fi
 
+# What earlier reviews left on the PR, so a re-run skips unchanged files and doesn't repeat
+# findings (engine contract: REVIEW_PRIOR). Fetched here with the job token, read-only; the
+# engine container gets the file, never the token. Any failure leaves it out: the engine then
+# reviews every file, and the publisher still skips exact repeats.
+changed_files() {
+  # Files whose content differs between the last reviewed commit ($1) and the head, as
+  # snapshots: GitHub's compare when the head builds on it; after a force push or rebase, a
+  # second compare from the merge base, matched by blob hash. Writes nothing when GitHub
+  # can't list every file (300+); fails when a commit is gone. Either way: review every file.
+  local last="$1" out="$2" base
+  [[ "$last" =~ ^[0-9a-f]{40}$ ]] || return 1
+  gh api "repos/$GITHUB_REPOSITORY/compare/$last...$HEAD_SHA" > "$out.head" || return 1
+  base="$(jq -r '.merge_base_commit.sha // ""' "$out.head")"
+  [[ "$base" =~ ^[0-9a-f]{40}$ ]] || return 1
+  if [ "$base" = "$last" ]; then
+    echo '{"files": []}' > "$out.last"
+  else
+    gh api "repos/$GITHUB_REPOSITORY/compare/$base...$last" > "$out.last" || return 1
+  fi
+  jq -n -c --arg last "$last" --slurpfile h "$out.head" --slurpfile l "$out.last" '
+    def blobs:
+      ([.files[]? | select(.status == "renamed" and .previous_filename) | {key: .previous_filename, value: null}]
+       + [.files[]? | {key: .filename, value: (if .status == "removed" then null else .sha end)}])
+      | from_entries;
+    if ($h[0].files | type) != "array" or ($l[0].files | type) != "array"
+      or ([$h[0].files[]?] | length) >= 300 or ([$l[0].files[]?] | length) >= 300 then empty
+    else ($h[0] | blobs) as $head | ($l[0] | blobs) as $was
+      | {base: $last, status: $h[0].status, snapshot_diff: true,
+         files: [($head + $was) | keys[] as $f
+           | select((($head | has($f)) and ($was | has($f)) and $head[$f] == $was[$f]) | not)
+           | $f]}
+    end' > "$out"
+}
+fetch_prior() {
+  # Via files, not arguments: a busy PR's comments exceed the OS limit on one argument.
+  local dir review issue changed last
+  dir="$(dirname -- "$1")"
+  review="$dir/prior-review.json" issue="$dir/prior-issue.json" changed="$dir/prior-changed.json"
+  echo '{}' > "$changed"
+  gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" --paginate --slurp > "$review" || return 1
+  gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate --slurp > "$issue" || return 1
+  # The last reviewed commit, from the hidden state line in the bot's summary comment.
+  last="$(jq -r '[.[][] | select(.user.type == "Bot") | .body // ""
+      | select(contains("<!-- devx-ai-review summary -->"))] | last // ""
+      | (capture("devx-ai-review state (?<s>\\{[^}]*\\})").s // "{}") | fromjson | .head // ""' \
+    "$issue")" || return 1
+  if [ -n "$last" ] && [ "$last" != "$HEAD_SHA" ] \
+    && changed_files "$last" "$changed.tmp" && [ -s "$changed.tmp" ]; then
+    mv "$changed.tmp" "$changed" # else changed_since stays out: review every file
+  fi
+  jq -n --slurpfile r "$review" --slurpfile i "$issue" --slurpfile c "$changed" \
+    '{review_comments: $r[0], conversation_comments: $i[0]}
+     + (if $c[0] == {} then {} else {changed_since: $c[0]} end)' > "$1"
+}
+prior_file="$control_dir/prior.json"
+prior_args=()
+# History is optional: one host-side deadline covers all pages, comparison and
+# assembly. Terminate the whole fetch process group before using the fallback.
+export -f changed_files fetch_prior
+# The child shell expands its argument, not this process.
+# shellcheck disable=SC2016
+if timeout --signal=TERM --kill-after=5 30 \
+  bash -o pipefail -c 'fetch_prior "$1"' -- "$prior_file" 2> "$control_dir/prior.err"; then
+  prior_args=(-v "$prior_file:/github/prior.json:ro" -e REVIEW_PRIOR=/github/prior.json)
+else
+  echo "::warning::Could not read earlier reviews of this PR; the engine reviews every file."
+fi
+
 # The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still
 # write a result) on its own; this wrapper is the backstop that keeps a hung
 # engine from holding the job, and the check, until the 6 hour job limit.
@@ -103,6 +171,7 @@ timeout --signal=TERM --kill-after=20 "$hard_timeout" \
   -e REVIEW_CONFIG -e REVIEW_SKILLS -e REVIEW_TIMEOUT \
   -e KORZA_CONTRACT_VERSION="$contract_version" -e REVIEW_IMAGE_DIGEST \
   -e REVIEW_OUTPUT_DIR=/github/out \
+  ${prior_args[@]+"${prior_args[@]}"} \
   "$REVIEW_IMAGE" action-review
 engine_exit=$?
 set -e
