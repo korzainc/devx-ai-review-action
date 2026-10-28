@@ -153,9 +153,11 @@ if args[:1] == ["api"] and "-X" not in args:  # run.sh reading what earlier revi
     elif path == "repos/fixture/repo/issues/7/comments":
         print(os.environ.get("FAKE_ISSUE_COMMENTS", "[[]]"))
     elif path.startswith("repos/fixture/repo/compare/"):
-        if not os.environ.get("FAKE_COMPARE"):
+        answers = json.loads(os.environ.get("FAKE_COMPARES") or "{}")  # "base...head" -> body
+        body = answers.get(path.rsplit("/", 1)[1], os.environ.get("FAKE_COMPARE"))
+        if body is None:
             sys.exit(1)
-        print(os.environ["FAKE_COMPARE"])
+        print(body if isinstance(body, str) else json.dumps(body))
     else:
         sys.exit("unexpected gh call: " + " ".join(args))
     sys.exit(0)
@@ -470,11 +472,33 @@ sys.exit(17)
         state = '<!-- devx-ai-review state {"head":"' + "c" * 40 + '","engine":"1"} -->'
         summary = [[{"id": 9, "user": {"type": "Bot"},
                      "body": "Summary\n\n<!-- devx-ai-review summary -->\n" + state}]]
-        compare = {"status": "ahead", "files": [{"filename": "a.py"}], "merge_base_commit": {}}
+        compare = {"status": "ahead", "merge_base_commit": {"sha": "c" * 40},
+                   "files": [{"filename": "a.py", "sha": "1", "status": "modified"}]}
         _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary),
                                       FAKE_COMPARE=json.dumps(compare))
-        self.assertEqual(seen["file"]["changed_since"],
-                         {"base": "c" * 40, "status": "ahead", "files": ["a.py"]})
+        self.assertEqual(seen["file"]["changed_since"], {
+            "base": "c" * 40, "status": "ahead", "snapshot_diff": True, "files": ["a.py"]})
+
+    def test_after_a_force_push_only_files_that_differ_are_passed(self):
+        last = "c" * 40
+        state = '<!-- devx-ai-review state {"head":"' + last + '","unfinished":["u.py"]} -->'
+        summary = [[{"id": 9, "user": {"type": "Bot"},
+                     "body": "<!-- devx-ai-review summary -->\n" + state}]]
+
+        def f(name, sha, status="modified"):
+            return {"filename": name, "sha": sha, "status": status}
+
+        compares = {  # merge base m: a.py has the same blob on both sides; b.py differs
+            f"{last}...{HEAD}": {"status": "diverged", "merge_base_commit": {"sha": "m"},
+                                 "files": [f("a.py", "1"), f("b.py", "2"), f("gone.py", "", "removed")]},
+            f"m...{last}": {"status": "ahead", "merge_base_commit": {"sha": "m"},
+                            "files": [f("a.py", "1"), f("b.py", "9"), f("old.py", "3")]},
+        }
+        _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                                      FAKE_COMPARES=json.dumps(compares))
+        self.assertEqual(seen["file"]["changed_since"], {
+            "base": last, "status": "diverged", "snapshot_diff": True,
+            "files": ["b.py", "gone.py", "old.py"]})
 
     def test_force_pushed_last_commit_leaves_the_changed_set_out(self):
         state = '<!-- devx-ai-review state {"head":"' + "c" * 40 + '"} -->'

@@ -83,6 +83,32 @@ fi
 # findings (engine contract: REVIEW_PRIOR). Fetched here with the job token, read-only; the
 # engine container gets the file, never the token. Any failure leaves it out: the engine then
 # reviews every file, and the publisher still skips exact repeats.
+changed_files() {
+  # Files whose content differs between the last reviewed commit ($1) and the head, as
+  # snapshots: GitHub's compare when the head builds on it; after a force push or rebase, a
+  # second compare from the merge base, matched by blob hash. Writes nothing when GitHub
+  # can't list every file (300+); fails when a commit is gone. Either way: review every file.
+  local last="$1" out="$2" base
+  gh api "repos/$GITHUB_REPOSITORY/compare/$last...$HEAD_SHA" > "$out.head" || return 1
+  base="$(jq -r '.merge_base_commit.sha // ""' "$out.head")"
+  if [ "$base" = "$last" ]; then
+    echo '{"files": []}' > "$out.last"
+  else
+    gh api "repos/$GITHUB_REPOSITORY/compare/$base...$last" > "$out.last" || return 1
+  fi
+  jq -n -c --arg last "$last" --slurpfile h "$out.head" --slurpfile l "$out.last" '
+    def blobs: [.files[]?
+      | (if .previous_filename then {key: .previous_filename, value: null} else empty end),
+        {key: .filename, value: (if .status == "removed" then null else .sha end)}]
+      | from_entries;
+    if ([$h[0].files[]?] | length) >= 300 or ([$l[0].files[]?] | length) >= 300 then empty
+    else ($h[0] | blobs) as $head | ($l[0] | blobs) as $was
+      | {base: $last, status: $h[0].status, snapshot_diff: true,
+         files: [($head + $was) | keys[] as $f
+           | select((($head | has($f)) and ($was | has($f)) and $head[$f] == $was[$f]) | not)
+           | $f]}
+    end' > "$out"
+}
 fetch_prior() {
   # Via files, not arguments: a busy PR's comments exceed the OS limit on one argument.
   local dir review issue changed last
@@ -96,11 +122,9 @@ fetch_prior() {
       | select(contains("<!-- devx-ai-review summary -->"))] | last // ""
       | (capture("devx-ai-review state (?<s>\\{[^}]*\\})").s // "{}") | fromjson | .head // ""' \
     "$issue")" || return 1
-  if [ -n "$last" ] && [ "$last" != "$HEAD_SHA" ]; then
-    # Unanswerable (e.g. 404 after a force push): leave changed_since out, review every file.
-    gh api "repos/$GITHUB_REPOSITORY/compare/$last...$HEAD_SHA" \
-      | jq -c --arg base "$last" '{base: $base, status, files: [.files[].filename]}' \
-        > "$changed.tmp" && mv "$changed.tmp" "$changed"
+  if [ -n "$last" ] && [ "$last" != "$HEAD_SHA" ] \
+    && changed_files "$last" "$changed.tmp" && [ -s "$changed.tmp" ]; then
+    mv "$changed.tmp" "$changed"  # else changed_since stays out: review every file
   fi
   jq -n --slurpfile r "$review" --slurpfile i "$issue" --slurpfile c "$changed" \
     '{review_comments: $r[0], conversation_comments: $i[0]}
