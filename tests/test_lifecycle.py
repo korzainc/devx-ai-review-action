@@ -57,6 +57,13 @@ assert args[-1] == "action-review", args
 mounts = [args[i+1] for i, arg in enumerate(args[:-1]) if arg == "-v"]
 out = pathlib.Path(next(m[:-len(":/github/out")] for m in mounts if m.endswith(":/github/out")))
 pathlib.Path(os.environ["DOCKER_RECORD"]).write_text(str(out))
+# What the engine would see of earlier reviews: the env and the mounted file.
+prior = next((m.rsplit(":", 2)[0] for m in mounts if m.endswith(":/github/prior.json:ro")), None)
+pathlib.Path(os.environ["DOCKER_RECORD"] + ".prior").write_text(json.dumps({
+    "env": "REVIEW_PRIOR=/github/prior.json" in args,
+    "token": any(a.startswith(("GITHUB_TOKEN", "GH_TOKEN")) for a in args),
+    "file": json.loads(pathlib.Path(prior).read_text()) if prior else None,
+}))
 
 
 def write_handoff(out, text):
@@ -136,7 +143,23 @@ if os.environ["FAKE_SARIF"] and not os.environ["FAKE_PLANT"]:
 sys.exit(int(os.environ["FAKE_EXIT"]))
 ''')
         self.executable("gh", '''import json, os, pathlib, sys
-assert sys.argv[1:] == ["api", "-X", "PATCH", "repos/fixture/repo/check-runs/7", "--input", "-"], sys.argv
+args = sys.argv[1:]
+if args[:1] == ["api"] and "-X" not in args:  # run.sh reading what earlier reviews left
+    if os.environ.get("FAKE_GH_FAIL"):
+        sys.exit(1)
+    path = args[1]
+    if path == "repos/fixture/repo/pulls/7/comments":
+        print(os.environ.get("FAKE_REVIEW_COMMENTS", "[[]]"))
+    elif path == "repos/fixture/repo/issues/7/comments":
+        print(os.environ.get("FAKE_ISSUE_COMMENTS", "[[]]"))
+    elif path.startswith("repos/fixture/repo/compare/"):
+        if not os.environ.get("FAKE_COMPARE"):
+            sys.exit(1)
+        print(os.environ["FAKE_COMPARE"])
+    else:
+        sys.exit("unexpected gh call: " + " ".join(args))
+    sys.exit(0)
+assert args == ["api", "-X", "PATCH", "repos/fixture/repo/check-runs/7", "--input", "-"], sys.argv
 payload = json.load(sys.stdin)
 pathlib.Path(os.environ["GH_RECORD"]).write_text(json.dumps(payload))
 ''')
@@ -428,6 +451,45 @@ sys.exit(17)
         self.assertEqual(patch["conclusion"], "failure")
         self.assertNotIn("fixture-injected", proc.stdout + proc.stderr)
         self.assertIn(payload["verdict"]["reason"], patch["output"]["summary"])
+
+
+    def prior_seen(self, **extra):
+        proc, _outputs, _directory, env = self.run_review(result("pass"), **extra)
+        return proc, json.loads(Path(env["DOCKER_RECORD"] + ".prior").read_text())
+
+    def test_first_review_passes_earlier_comments_without_a_changed_set(self):
+        review = [[{"id": 1, "body": "x <!-- devx-ai-review id=dar-1 -->"}]]
+        proc, seen = self.prior_seen(FAKE_REVIEW_COMMENTS=json.dumps(review))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(seen["env"])
+        self.assertFalse(seen["token"])
+        self.assertEqual(seen["file"]["review_comments"], review)
+        self.assertNotIn("changed_since", seen["file"])  # no summary yet: a first review
+
+    def test_re_review_passes_files_changed_since_the_last_reviewed_commit(self):
+        state = '<!-- devx-ai-review state {"head":"' + "c" * 40 + '","engine":"1"} -->'
+        summary = [[{"id": 9, "user": {"type": "Bot"},
+                     "body": "Summary\n\n<!-- devx-ai-review summary -->\n" + state}]]
+        compare = {"status": "ahead", "files": [{"filename": "a.py"}], "merge_base_commit": {}}
+        _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                                      FAKE_COMPARE=json.dumps(compare))
+        self.assertEqual(seen["file"]["changed_since"],
+                         {"base": "c" * 40, "status": "ahead", "files": ["a.py"]})
+
+    def test_force_pushed_last_commit_leaves_the_changed_set_out(self):
+        state = '<!-- devx-ai-review state {"head":"' + "c" * 40 + '"} -->'
+        summary = [[{"id": 9, "user": {"type": "Bot"},
+                     "body": "<!-- devx-ai-review summary -->\n" + state}]]
+        _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary))  # compare fails
+        self.assertNotIn("changed_since", seen["file"])
+        self.assertTrue(seen["env"])
+
+    def test_unreadable_earlier_reviews_still_review_everything(self):
+        proc, seen = self.prior_seen(FAKE_GH_FAIL="1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(seen["env"])
+        self.assertIsNone(seen["file"])
+        self.assertIn("Could not read earlier reviews", proc.stdout)
 
 
 if __name__ == "__main__":

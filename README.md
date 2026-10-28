@@ -194,6 +194,7 @@ UID with model authority only:
 | `PR_NUMBER`, `BASE_SHA`, `HEAD_SHA` | The PR and the merge-base..head range to review |
 | `CHECK_RUN_ID` | Identity of the open check run, for logging and correlation only. The review container has no GitHub token and cannot modify it; `finalize.sh` completes it. |
 | `REVIEW_CONFIG`, `REVIEW_SKILLS`, `REVIEW_TIMEOUT` | From the action inputs |
+| `REVIEW_PRIOR` → `/github/prior.json` (read-only) | What earlier reviews left on the PR, fetched by the action with the job token: `review_comments` (the bot's earlier findings), `conversation_comments` (its summary, with the last reviewed commit) and, when the head builds on that commit, `changed_since`. Omitted if it can't be read; the engine then reviews every file. |
 | `KORZA_CONTRACT_VERSION` | The contract version this action implements, currently `1` |
 
 The engine writes versioned `result.json`, typed `publish/result.json` and

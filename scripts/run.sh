@@ -79,6 +79,41 @@ if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1 \
   incomplete "Could not pull engine image $REVIEW_IMAGE. Check that this repo has read access to the package (or pass registry-token); a pull also gives up after ${pull_timeout}s."
 fi
 
+# What earlier reviews left on the PR, so a re-run skips unchanged files and doesn't repeat
+# findings (engine contract: REVIEW_PRIOR). Fetched here with the job token, read-only; the
+# engine container gets the file, never the token. Any failure leaves it out: the engine then
+# reviews every file, and the publisher still skips exact repeats.
+fetch_prior() {
+  # Via files, not arguments: a busy PR's comments exceed the OS limit on one argument.
+  local dir review issue changed last
+  dir="$(dirname -- "$1")"
+  review="$dir/prior-review.json" issue="$dir/prior-issue.json" changed="$dir/prior-changed.json"
+  echo '{}' > "$changed"
+  gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" --paginate --slurp > "$review" || return 1
+  gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" --paginate --slurp > "$issue" || return 1
+  # The last reviewed commit, from the hidden state line in the bot's summary comment.
+  last="$(jq -r '[.[][] | select(.user.type == "Bot") | .body // ""
+      | select(contains("<!-- devx-ai-review summary -->"))] | last // ""
+      | (capture("devx-ai-review state (?<s>\\{[^}]*\\})").s // "{}") | fromjson | .head // ""' \
+    "$issue")" || return 1
+  if [ -n "$last" ] && [ "$last" != "$HEAD_SHA" ]; then
+    # Unanswerable (e.g. 404 after a force push): leave changed_since out, review every file.
+    gh api "repos/$GITHUB_REPOSITORY/compare/$last...$HEAD_SHA" \
+      | jq -c --arg base "$last" '{base: $base, status, files: [.files[].filename]}' \
+        > "$changed.tmp" && mv "$changed.tmp" "$changed"
+  fi
+  jq -n --slurpfile r "$review" --slurpfile i "$issue" --slurpfile c "$changed" \
+    '{review_comments: $r[0], conversation_comments: $i[0]}
+     + (if $c[0] == {} then {} else {changed_since: $c[0]} end)' > "$1"
+}
+prior_file="$control_dir/prior.json"
+prior_args=()
+if fetch_prior "$prior_file" 2> "$control_dir/prior.err"; then
+  prior_args=(-v "$prior_file:/github/prior.json:ro" -e REVIEW_PRIOR=/github/prior.json)
+else
+  echo "::warning::Could not read earlier reviews of this PR; the engine reviews every file."
+fi
+
 # The engine gets REVIEW_TIMEOUT to finish (or time out gracefully and still
 # write a result) on its own; this wrapper is the backstop that keeps a hung
 # engine from holding the job, and the check, until the 6 hour job limit.
@@ -103,6 +138,7 @@ timeout --signal=TERM --kill-after=20 "$hard_timeout" \
   -e REVIEW_CONFIG -e REVIEW_SKILLS -e REVIEW_TIMEOUT \
   -e KORZA_CONTRACT_VERSION="$contract_version" -e REVIEW_IMAGE_DIGEST \
   -e REVIEW_OUTPUT_DIR=/github/out \
+  ${prior_args[@]+"${prior_args[@]}"} \
   "$REVIEW_IMAGE" action-review
 engine_exit=$?
 set -e
