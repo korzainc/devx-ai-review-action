@@ -1,0 +1,20 @@
+name: AI Code Review
+on:
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  packages: read
+jobs:
+  review:
+    if: ${{ !cancelled() && contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) }}
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@8546a04139cde7c356989b197b53b5b231d3703b
+    with:
+      fail-on-error: 'true'
+      check-name: AI Code Review
+      job-timeout-minutes: 25
+      concurrency-prefix: ai-review-dogfood
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
