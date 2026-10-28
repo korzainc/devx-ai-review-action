@@ -116,6 +116,7 @@ runs:
       if: steps.prep.outputs.run == 'true'
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         REVIEW_IMAGE: ${{ inputs.image }}
         REVIEW_CONFIG: ${{ inputs.config }}

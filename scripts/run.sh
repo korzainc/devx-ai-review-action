@@ -89,19 +89,22 @@ changed_files() {
   # second compare from the merge base, matched by blob hash. Writes nothing when GitHub
   # can't list every file (300+); fails when a commit is gone. Either way: review every file.
   local last="$1" out="$2" base
+  [[ "$last" =~ ^[0-9a-f]{40}$ ]] || return 1
   gh api "repos/$GITHUB_REPOSITORY/compare/$last...$HEAD_SHA" > "$out.head" || return 1
   base="$(jq -r '.merge_base_commit.sha // ""' "$out.head")"
+  [[ "$base" =~ ^[0-9a-f]{40}$ ]] || return 1
   if [ "$base" = "$last" ]; then
     echo '{"files": []}' > "$out.last"
   else
     gh api "repos/$GITHUB_REPOSITORY/compare/$base...$last" > "$out.last" || return 1
   fi
   jq -n -c --arg last "$last" --slurpfile h "$out.head" --slurpfile l "$out.last" '
-    def blobs: [.files[]?
-      | (if .previous_filename then {key: .previous_filename, value: null} else empty end),
-        {key: .filename, value: (if .status == "removed" then null else .sha end)}]
+    def blobs:
+      ([.files[]? | select(.status == "renamed" and .previous_filename) | {key: .previous_filename, value: null}]
+       + [.files[]? | {key: .filename, value: (if .status == "removed" then null else .sha end)}])
       | from_entries;
-    if ([$h[0].files[]?] | length) >= 300 or ([$l[0].files[]?] | length) >= 300 then empty
+    if ($h[0].files | type) != "array" or ($l[0].files | type) != "array"
+      or ([$h[0].files[]?] | length) >= 300 or ([$l[0].files[]?] | length) >= 300 then empty
     else ($h[0] | blobs) as $head | ($l[0] | blobs) as $was
       | {base: $last, status: $h[0].status, snapshot_diff: true,
          files: [($head + $was) | keys[] as $f
@@ -124,7 +127,7 @@ fetch_prior() {
     "$issue")" || return 1
   if [ -n "$last" ] && [ "$last" != "$HEAD_SHA" ] \
     && changed_files "$last" "$changed.tmp" && [ -s "$changed.tmp" ]; then
-    mv "$changed.tmp" "$changed"  # else changed_since stays out: review every file
+    mv "$changed.tmp" "$changed" # else changed_since stays out: review every file
   fi
   jq -n --slurpfile r "$review" --slurpfile i "$issue" --slurpfile c "$changed" \
     '{review_comments: $r[0], conversation_comments: $i[0]}
@@ -132,7 +135,13 @@ fetch_prior() {
 }
 prior_file="$control_dir/prior.json"
 prior_args=()
-if fetch_prior "$prior_file" 2> "$control_dir/prior.err"; then
+# History is optional: one host-side deadline covers all pages, comparison and
+# assembly. Terminate the whole fetch process group before using the fallback.
+export -f changed_files fetch_prior
+# The child shell expands its argument, not this process.
+# shellcheck disable=SC2016
+if timeout --signal=TERM --kill-after=5 30 \
+  bash -o pipefail -c 'fetch_prior "$1"' -- "$prior_file" 2> "$control_dir/prior.err"; then
   prior_args=(-v "$prior_file:/github/prior.json:ro" -e REVIEW_PRIOR=/github/prior.json)
 else
   echo "::warning::Could not read earlier reviews of this PR; the engine reviews every file."
