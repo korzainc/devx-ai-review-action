@@ -65,6 +65,13 @@ inputs:
     description: Also upload findings to GitHub code scanning (needs security-events write).
     required: false
     default: "false"
+  upload-debug:
+    description: >
+      Keep the run's debug files (log, model calls, findings after each engine step, inputs)
+      as a workflow artifact for 14 days, to read or replay a review. No keys or tokens; no
+      repo checkout.
+    required: false
+    default: "true"
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false
@@ -192,3 +199,14 @@ runs:
       with:
         sarif_file: ${{ steps.review.outputs.sarif-file }}
         category: korza-ai-review
+
+    # A review that misbehaved can be read, or replayed one step at a time, from these. The
+    # engine writes no keys or tokens there and leaves the repo checkout out.
+    - name: Upload debug files
+      if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != ''
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ai-review-pr${{ steps.prep.outputs.pr-number }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.review.outputs.output-dir }}/run
+        retention-days: 14
+        if-no-files-found: ignore

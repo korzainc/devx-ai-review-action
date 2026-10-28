@@ -141,6 +141,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `timeout-seconds` | `600` | Engine time budget, 1 through 3600. 30s past it the action sends TERM, then KILL 20s later. |
 | `publish-timeout-seconds` | `120` | Publisher time budget in seconds (1 through 3600), followed by bounded termination and cleanup. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
+| `upload-debug` | `true` | Keep the run's debug files (log, model calls, findings after each engine step, inputs) as a workflow artifact for 14 days, to read or replay a review. No keys or tokens, no repo checkout. Anyone who can read the repo can download them. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
 
 ## Outputs
