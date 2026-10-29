@@ -13,7 +13,7 @@ for name in OUTPUT_DIR REVIEW_COMPLETION_FILE REVIEW_IMAGE GITHUB_REPOSITORY PR_
     exit 1
   fi
 done
-publish_timeout="${PUBLISH_TIMEOUT:-120}"
+publish_timeout="${PUBLISH_TIMEOUT:-360}"
 if [[ ! "$publish_timeout" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$publish_timeout" -gt 3600 ]; then
   echo "::error::publish-timeout-seconds must be 1 through 3600."
   exit 1

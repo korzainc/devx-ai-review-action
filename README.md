@@ -140,7 +140,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `check-name` | `AI Code Review` | Name of the check run to require. |
 | `fail-on-error` | `false` | Report `failure` instead of `neutral` when the review cannot complete. |
 | `timeout-seconds` | `600` | Engine time budget, 1 through 3600. 30s past it the action sends TERM, then KILL 20s later. |
-| `publish-timeout-seconds` | `120` | Publisher time budget in seconds (1 through 3600), followed by bounded termination and cleanup. |
+| `publish-timeout-seconds` | `360` | Publisher time budget in seconds (1 through 3600), followed by bounded termination and cleanup. The publisher paces itself to GitHub's content-creation rate limit (about 15 comments a minute per run) and may wait up to 240 s in all, so a large review takes a few minutes; keep this above that. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
 | `upload-debug` | `true` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. Set `false` to skip uploads. See the data note below. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |

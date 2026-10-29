@@ -58,9 +58,12 @@ inputs:
     required: false
     default: "600"
   publish-timeout-seconds:
-    description: Publisher time budget in seconds (1 through 3600), plus bounded termination cleanup.
+    description: >
+      Publisher time budget in seconds (1 through 3600), plus bounded termination cleanup.
+      The publisher paces itself to GitHub's content-creation rate limit and may wait up to
+      the engine's publish.max_wait_s (240 s) in all, so keep this above that.
     required: false
-    default: "120"
+    default: "360"
   upload-sarif:
     description: Also upload findings to GitHub code scanning (needs security-events write).
     required: false
