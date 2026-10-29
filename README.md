@@ -48,11 +48,12 @@ uses hosted `ubuntu-latest`.
 The `ANTHROPIC_API_KEY` secret belongs to the consuming repository (or an org
 secret available to it). No key is needed to post the hint; a review needs it.
 The shared workflow accepts optional `config`, `skills`, `timeout-seconds`,
-`fail-on-error` and `check-name` inputs under `with:`. Their defaults match the
-action below. `job-timeout-minutes` bounds the whole job, including preparation
-and publication; it defaults to GitHub’s standard 360 minutes. Keep it above
+`fail-on-error`, `check-name` and `upload-debug` inputs under `with:`. Their
+defaults match the action below. `job-timeout-minutes` bounds the whole job,
+including preparation and publication; it defaults to GitHub’s standard 360 minutes. Keep it above
 the engine budget plus image-pull and publishing time. Existing consumers can
-preserve their check name and shorter job deadline with these inputs.
+preserve their check name and shorter job deadline with these inputs. Set
+`upload-debug: false` (an unquoted YAML boolean) to disable debug artifact uploads.
 `concurrency-prefix` defaults to `ai-review`; retain an existing prefix when
 migrating so a new review can still cancel an older run on the same PR.
 
@@ -141,8 +142,14 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `timeout-seconds` | `600` | Engine time budget, 1 through 3600. 30s past it the action sends TERM, then KILL 20s later. |
 | `publish-timeout-seconds` | `120` | Publisher time budget in seconds (1 through 3600), followed by bounded termination and cleanup. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
-| `upload-debug` | `true` | Keep the run's debug files (log, model calls, findings after each engine step, inputs) as a workflow artifact for 14 days, to read or replay a review. No keys or tokens, no repo checkout. Anyone who can read the repo can download them. |
+| `upload-debug` | `true` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. Set `false` to skip uploads. See the data note below. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
+
+Debug artifacts contain unredacted source and model text, which may include sensitive
+content. The action does not deliberately attach the checkout, environment files or
+credential files. Anyone with read access to the repository can download them.
+Publisher run files are not included in these artifacts. Normal console output
+remains in workflow logs.
 
 ## Outputs
 

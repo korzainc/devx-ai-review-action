@@ -67,9 +67,10 @@ inputs:
     default: "false"
   upload-debug:
     description: >
-      Keep the run's debug files (log, model calls, findings after each engine step, inputs)
-      as a workflow artifact for 14 days, to read or replay a review. No keys or tokens; no
-      repo checkout.
+      Keep review-stage logs, model calls, findings and inputs as a workflow artifact
+      for up to 14 days. Raw source and model text may contain sensitive content. No checkout,
+      environment files or credential files are deliberately attached. Publisher run files
+      are not included; normal console output remains in workflow logs.
     required: false
     default: "true"
   image:
@@ -200,8 +201,7 @@ runs:
         sarif_file: ${{ steps.review.outputs.sarif-file }}
         category: korza-ai-review
 
-    # A review that misbehaved can be read, or replayed one step at a time, from these. The
-    # engine writes no keys or tokens there and leaves the repo checkout out.
+    # Keep review-stage files for debugging. Source and model text are not redacted.
     - name: Upload debug files
       if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != ''
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

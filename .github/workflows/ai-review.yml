@@ -32,6 +32,10 @@ on:
         description: Overall job deadline, including preparation and publication.
         type: number
         default: 360
+      upload-debug:
+        description: Keep source and model debug artifacts for 14 days; false disables upload.
+        type: boolean
+        default: true
       fail-on-error:
         description: Whether an incomplete review fails the check instead of reporting neutral.
         type: string
@@ -115,4 +119,5 @@ jobs:
           skills: ${{ inputs.skills }}
           timeout-seconds: ${{ inputs.timeout-seconds }}
           fail-on-error: ${{ inputs.fail-on-error }}
+          upload-debug: ${{ inputs.upload-debug }}
           check-name: ${{ inputs.check-name }}
