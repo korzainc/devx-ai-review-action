@@ -13,7 +13,6 @@ jobs:
     uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@8546a04139cde7c356989b197b53b5b231d3703b
     with:
       fail-on-error: 'true'
-      check-name: AI Code Review
       job-timeout-minutes: 25
       concurrency-prefix: ai-review-dogfood
     secrets:
