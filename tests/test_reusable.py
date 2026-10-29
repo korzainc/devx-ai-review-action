@@ -187,13 +187,16 @@ else: raise SystemExit(1)
         upload = action.split("    - name: Upload debug files\n", 1)[1]
         gate = next(line.split("if:", 1)[1].strip() for line in upload.splitlines() if "if:" in line)
         gate = gate.replace("inputs.upload-debug", "inputs.upload_debug").replace("steps.review.outputs.output-dir", "steps.review.outputs.output_dir")
+        gate = gate.replace("steps.debug.outputs.debug-dir", "steps.debug.outputs.debug_dir")
         # The existing bounded evaluator accepts equality, so express the same nonempty check.
         gate = gate.replace("steps.review.outputs.output_dir != ''", "!(steps.review.outputs.output_dir == '')")
+        gate = gate.replace("steps.debug.outputs.debug_dir != ''", "!(steps.debug.outputs.debug_dir == '')")
         for supplied in (None, False, True):
             effective = True if supplied is None else supplied
             forwarded = github_expression(value, {"inputs": SimpleNamespace(upload_debug=effective)}, allowed_functions={})
             self.assertIs(forwarded, effective)
             for has_output in (False, True):
-                with self.subTest(supplied=supplied, output=has_output):
-                    accepted = github_expression(gate, {"inputs": SimpleNamespace(upload_debug=str(forwarded).lower()), "steps": SimpleNamespace(review=SimpleNamespace(outputs=SimpleNamespace(output_dir="owned-output" if has_output else "")))}, allowed_functions={"always": lambda: True})
-                    self.assertEqual(bool(accepted), effective and has_output)
+                for has_stage in (False, True):
+                    with self.subTest(supplied=supplied, output=has_output, stage=has_stage):
+                        accepted = github_expression(gate, {"inputs": SimpleNamespace(upload_debug=str(forwarded).lower()), "steps": SimpleNamespace(review=SimpleNamespace(outputs=SimpleNamespace(output_dir="owned-output" if has_output else "")), debug=SimpleNamespace(outputs=SimpleNamespace(debug_dir="private-debug" if has_stage else "")))}, allowed_functions={"always": lambda: True})
+                        self.assertEqual(bool(accepted), effective and has_output and has_stage)

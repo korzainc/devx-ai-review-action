@@ -201,12 +201,21 @@ runs:
         sarif_file: ${{ steps.review.outputs.sarif-file }}
         category: korza-ai-review
 
-    # Keep review-stage files for debugging. Source and model text are not redacted.
-    - name: Upload debug files
+    # Snapshot regular debug files outside the engine mount before uploading.
+    # Source and model text are not redacted.
+    - name: Stage debug files
+      id: debug
       if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != ''
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ steps.review.outputs.output-dir }}
+      run: env -i PATH="$PATH" OUTPUT_DIR="$OUTPUT_DIR" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" python3 -I "$GITHUB_ACTION_PATH/scripts/stage_debug.py"
+
+    - name: Upload debug files
+      if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != '' && steps.debug.outputs.debug-dir != ''
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ai-review-pr${{ steps.prep.outputs.pr-number }}-${{ github.run_id }}-${{ github.run_attempt }}
-        path: ${{ steps.review.outputs.output-dir }}/run
+        path: ${{ steps.debug.outputs.debug-dir }}
         retention-days: 14
         if-no-files-found: ignore
