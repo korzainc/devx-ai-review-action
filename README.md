@@ -180,7 +180,9 @@ read access to this one package only, so the token can pull nothing else.
 - PR titles, descriptions, and comments are treated as untrusted data, never as instructions.
 - Only the associations in `allowed-associations` can trigger a review by comment.
 - Inputs reach scripts through environment variables, never interpolated into shell.
-- The pilot requires the pinned checkout v7.0.1 shown above, which stores its
+- The pilot requires `actions/checkout` v7.0.1, pinned in the
+  [shared workflow](.github/workflows/ai-review.yml) and
+  [full workflow example](examples/ai-review.yml). This version stores its
   persisted credential outside the mounted workspace. Keep credentials outside
   `/workspace`; do not mount the runner's home or whole `RUNNER_TEMP` into the
   engine. A custom checkout must preserve that boundary before use.
