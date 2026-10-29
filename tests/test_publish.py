@@ -193,8 +193,12 @@ sys.exit(code)
         args, env = self.calls()[0]["argv"], self.calls()[0]["env"]
         self.assertEqual(args[-2:], [IMAGE, "action-publish"])
         forwarded = [args[i + 1] for i, value in enumerate(args) if value == "-e"]
-        self.assertEqual(set(forwarded), {"GITHUB_TOKEN", "GITHUB_REPOSITORY", "PR_NUMBER",
-                                         "REVIEW_OUTPUT_DIR=/github/out", "KORZA_CONTRACT_VERSION=1"})
+        timeout = next(f for f in forwarded if f.startswith("PUBLISH_TIMEOUT="))
+        self.assertEqual(set(forwarded) - {timeout},
+                         {"GITHUB_TOKEN", "GITHUB_REPOSITORY", "PR_NUMBER",
+                          "REVIEW_OUTPUT_DIR=/github/out", "KORZA_CONTRACT_VERSION=1"})
+        # the engine sizes its rate-limit waiting to this, so it matches the step's own limit
+        self.assertEqual(timeout, "PUBLISH_TIMEOUT=" + self.env.get("PUBLISH_TIMEOUT", "360"))
         self.assertEqual(args.count("-v"), 2)
         mounts = [args[i+1] for i, arg in enumerate(args) if arg == "-v"]
         self.assertTrue(mounts[0].endswith(":/github/out/publish:ro"))

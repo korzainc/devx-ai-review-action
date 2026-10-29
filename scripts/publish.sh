@@ -65,6 +65,7 @@ env -i PATH="$PATH" GITHUB_TOKEN="$GITHUB_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPO
   docker run --rm --init --name "$publisher_container" --pull=never --user "$(id -u):$(id -g)" \
   -v "$stage/publish:/github/out/publish:ro" -v "$stage/run:/github/out/run:rw" \
   -e GITHUB_TOKEN -e GITHUB_REPOSITORY -e PR_NUMBER \
+  -e PUBLISH_TIMEOUT="$publish_timeout" \
   -e REVIEW_OUTPUT_DIR=/github/out -e KORZA_CONTRACT_VERSION=1 \
   "$REVIEW_IMAGE" action-publish &
 publisher_pid=$!
