@@ -29,7 +29,8 @@ import sys
 
 MIB = 1024 * 1024
 REVIEWERS = {"spec-adherence", "code-reviewer", "standards-and-practices",
-             "test-coverage", "performance-review", "bug-hunter"}
+             "test-coverage", "performance-review", "bug-hunter",
+             "owasp-reviewer", "stride-modeler"}
 SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
 
@@ -228,15 +229,18 @@ def validate_receipt(args):
     receipt, _ = read_json(Path(args.stage_dir) / "run/publish/publish.json", 256 * 1024)
     require(receipt.get("publisher") == "github", "unexpected publisher")
     posted, couldnt = receipt.get("posted_comments"), receipt.get("couldnt_place")
-    require(integer(posted) and integer(couldnt), "invalid publication counts")
+    already = receipt.get("already_posted", 0)
+    require(integer(posted) and integer(couldnt) and integer(already), "invalid publication counts")
     moved, summary_only = receipt.get("head_moved"), receipt.get("summary_only")
     require(type(moved) is bool and type(summary_only) is bool, "invalid staleness flags")
     require(isinstance(receipt.get("notes"), list) and all(text(v) for v in receipt["notes"]),
             "invalid receipt notes")
     if summary_only:
-        require(moved and posted == 0 and couldnt == 0, "inconsistent stale summary receipt")
+        require(moved and posted == 0 and couldnt == 0 and already == 0,
+                "inconsistent stale summary receipt")
     else:
-        require(posted + couldnt == int(args.findings_count), "receipt does not account for findings")
+        require(posted + couldnt + already == int(args.findings_count),
+                "receipt does not account for findings")
     require(args.server_url == "https://github.com", "publisher supports only https://github.com")
     expected = args.server_url + "/" + args.repository + "/pull/" + args.pr_number
     require(text(receipt.get("url")) and
@@ -245,7 +249,8 @@ def validate_receipt(args):
     # Retain only these validated fields after the temporary engine export is removed.
     saved = {"contract_version": 1, "repository": args.repository,
              "pr_number": int(args.pr_number), "publisher": "github", "posted_comments": posted,
-             "couldnt_place": couldnt, "head_moved": moved, "summary_only": summary_only,
+             "couldnt_place": couldnt, "already_posted": already,
+             "head_moved": moved, "summary_only": summary_only,
              "url": receipt["url"]}
     receipt_file = absolute(args.stage_dir) / "receipt.json"
     fd = os.open(receipt_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

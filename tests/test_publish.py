@@ -247,6 +247,44 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
         self.receipt["posted_comments"] = 1
         self.assertEqual(self.run_publish().returncode, 0)
 
+    def test_default_engine_role_metadata_can_stage_a_completed_handoff(self):
+        # Current contract_result(None, Settings()) metadata; the producer-to-host
+        # compatibility probe also binds this fixture to the real engine output.
+        self.action["skills_run"] = ["code-reviewer", "bug-hunter", "performance-review",
+                                     "owasp-reviewer"]
+        self.write_handoff()
+        published = self.run_publish()
+        self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+        self.assertEqual(len(self.calls()), 1)
+
+    def test_security_reviewer_findings_can_stage_and_publish(self):
+        for role in ("owasp-reviewer", "stride-modeler"):
+            with self.subTest(role=role):
+                self.add_finding()
+                self.result["findings"][0].update(reviewer=role, category="security")
+                self.action["findings"][0].update(skill=role, rule_id=role + "/security")
+                # Isolate finding classification from the metadata-only test.
+                self.action["skills_run"] = []
+                self.receipt["posted_comments"] = 1
+                self.write_handoff()
+                published = self.run_publish()
+                self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+                received = json.loads((self.root / "received.json").read_text())
+                self.assertEqual(received["findings"][0]["reviewer"], role)
+
+    def test_unknown_roles_cannot_stage_metadata_or_findings(self):
+        self.add_finding()
+        for role in ("scanner-orchestrator", "security-reviewer", "unknown"):
+            for target in (self.action, self.action["findings"][0], self.result["findings"][0]):
+                key = "skills_run" if target is self.action else (
+                    "skill" if target is self.action["findings"][0] else "reviewer")
+                with self.subTest(role=role, field=key):
+                    previous = target[key]
+                    target[key] = [role] if key == "skills_run" else role
+                    self.write_handoff()
+                    self.assert_rejected()
+                    target[key] = previous
+
     def test_stale_and_unplaceable_summaries_are_successful_delivery(self):
         self.add_finding()
         for updates in ({"head_moved": True, "summary_only": True}, {"couldnt_place": 1},
@@ -257,6 +295,55 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
                 result = self.run_publish()
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.receipt = original
+
+    def test_duplicate_skips_accounted_without_inflating_new_posts(self):
+        self.add_finding()
+        for collection in (self.result["findings"], self.action["findings"]):
+            second = copy.deepcopy(collection[0])
+            second["id"] = "dar-second"
+            collection.append(second)
+        self.write_handoff()
+        gh = self.root / "gh"
+        gh.write_text("#!" + sys.executable + "\nimport pathlib,sys\n"
+                      "pathlib.Path(__file__).with_name('final.json').write_text(sys.stdin.read())\n")
+        gh.chmod(0o755)
+        for skipped in (1, 2):
+            with self.subTest(skipped=skipped):
+                self.receipt.update(posted_comments=2 - skipped, already_posted=skipped)
+                published = self.run_publish()
+                self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+                outputs = dict(line.split("=", 1) for line in
+                               (self.root / "outputs").read_text().splitlines())
+                self.assertEqual(outputs["delivery"], "success")
+                saved = json.loads(Path(outputs["receipt-file"]).read_text())
+                self.assertEqual(saved["posted_comments"], 2 - skipped)
+                self.assertEqual(saved["already_posted"], skipped)
+                finalized = subprocess.run(["bash", str(SCRIPTS / "finalize.sh")],
+                    env=dict(self.env, REVIEW_OUTCOME="success", VERDICT="pass",
+                             REVIEW_COMPLETED="true", PUBLISH_OUTCOME="success",
+                             DELIVERY=outputs["delivery"], FAIL_ON_ERROR="false",
+                             CHECK_RUN_ID="7", RESULT_FILE="", SUMMARY_FILE=""),
+                    text=True, capture_output=True, timeout=5)
+                self.assertEqual(finalized.returncode, 0, finalized.stderr)
+                self.assertEqual(json.loads((self.root / "final.json").read_text())["conclusion"],
+                                 "success")
+
+    def test_already_posted_must_be_strict_and_account_for_expected_findings(self):
+        self.add_finding()
+        for bad in (True, False, -1, "1", 1.0, None, [], {}, 0, 2):
+            with self.subTest(already_posted=bad):
+                self.receipt["already_posted"] = bad
+                published = self.run_publish()
+                self.assertNotEqual(published.returncode, 0, published.stdout + published.stderr)
+                self.assertNotIn("delivery=success", (self.root / "outputs").read_text())
+        for updates in ({"posted_comments": 1, "already_posted": 1},
+                        {"couldnt_place": 1, "already_posted": 1},
+                        {"head_moved": True, "summary_only": True, "already_posted": 1}):
+            with self.subTest(updates=updates):
+                self.receipt.update(posted_comments=0, couldnt_place=0,
+                                    head_moved=False, summary_only=False)
+                self.receipt.update(updates)
+                self.assertNotEqual(self.run_publish().returncode, 0)
 
     def test_completion_identity_process_status_and_hashes_are_required(self):
         bad = {"contract_version": True, "repository": "other/repo", "pr_number": 8,
