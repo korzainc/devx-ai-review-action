@@ -2,6 +2,8 @@ name: AI Code Review
 on:
   issue_comment:
     types: [created]
+  pull_request:
+    types: [opened, ready_for_review]
 permissions:
   contents: read
   pull-requests: write
@@ -9,7 +11,7 @@ permissions:
   packages: read
 jobs:
   review:
-    if: ${{ !cancelled() && contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) }}
+    if: ${{ !cancelled() && (github.event_name == 'pull_request' || contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body)) }}
     uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@8546a04139cde7c356989b197b53b5b231d3703b
     with:
       fail-on-error: 'true'
