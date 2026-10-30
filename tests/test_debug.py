@@ -1,5 +1,7 @@
 """Host debug exports must not expose paths outside the engine's run directory."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -44,6 +46,89 @@ class DebugTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    def limited_main(self, module, byte_limit, entry_limit):
+        captured = io.StringIO()
+        with (mock.patch.dict(os.environ, self.env, clear=True),
+              mock.patch.object(module, "MAX_DEBUG_BYTES", byte_limit, create=True),
+              mock.patch.object(module, "MAX_DEBUG_ENTRIES", entry_limit, create=True),
+              contextlib.redirect_stdout(captured)):
+            self.assertEqual(module.main(), 0)
+        values = dict(line.split("=", 1) for line in self.outputs.read_text().splitlines())
+        return captured.getvalue(), Path(values["debug-dir"]) if values.get("debug-dir") else None
+
+    def test_resource_limit_rejects_file_before_copying_its_bytes(self):
+        (self.run / "large.log").write_bytes(b"x" * 9)
+        module = self.helper()
+        with mock.patch.object(module, "copy_file", wraps=module.copy_file) as copied:
+            warning, stage = self.limited_main(module, 8, 10)
+        self.assertIsNone(stage)
+        copied.assert_not_called()
+        self.assertEqual(list(self.runner.iterdir()), [])
+        self.assertEqual(warning, "::warning::Debug files exceed staging resource limits; artifact upload skipped.\n")
+        self.assertNotIn("large.log", warning)
+
+    def test_aggregate_byte_limit_discards_any_partial_stage(self):
+        (self.run / "a.log").write_bytes(b"a" * 3)
+        (self.run / "b.log").write_bytes(b"b" * 6)
+        module = self.helper()
+        with mock.patch.object(module, "copy_file", wraps=module.copy_file) as copied:
+            warning, stage = self.limited_main(module, 8, 10)
+        self.assertIsNone(stage)
+        self.assertLessEqual(sum(call.args[2] for call in copied.call_args_list), 8)
+        self.assertEqual(list(self.runner.iterdir()), [])
+        self.assertIn("resource limits", warning)
+
+    def test_exact_resource_boundaries_preserve_complete_regular_files(self):
+        (self.run / "a.log").write_bytes(b"a" * 3)
+        (self.run / ".hidden").write_bytes(b"b" * 5)
+        warning, stage = self.limited_main(self.helper(), 8, 2)
+        self.assertIsNotNone(stage)
+        self.assertEqual((stage / "a.log").read_bytes(), b"a" * 3)
+        self.assertEqual((stage / ".hidden").read_bytes(), b"b" * 5)
+        self.assertEqual(warning, "")
+
+    def test_directory_entries_are_bounded_without_any_copied_file(self):
+        for name in ("first", "second", "third"):
+            (self.run / name).mkdir()
+        module = self.helper()
+        original_stat = os.stat
+        inspected = []
+
+        def record_stat(name, *args, **kwargs):
+            if name in ("first", "second", "third") and kwargs.get("follow_symlinks") is False:
+                inspected.append(name)
+            return original_stat(name, *args, **kwargs)
+
+        with mock.patch.object(module.os, "stat", side_effect=record_stat):
+            warning, stage = self.limited_main(module, 8, 2)
+        self.assertIsNone(stage)
+        self.assertEqual(len(inspected), 2)
+        self.assertEqual(list(self.runner.iterdir()), [])
+        self.assertEqual(warning, "::warning::Debug files exceed staging resource limits; artifact upload skipped.\n")
+
+    def test_unsafe_entries_also_consume_the_traversal_budget(self):
+        outside = self.base / "benign-outside"
+        outside.write_text("outside")
+        for name in ("link-one", "link-two", "link-three"):
+            (self.run / name).symlink_to(outside)
+        (self.run / "safe.log").write_text("safe")
+        warning, stage = self.limited_main(self.helper(), 8, 2)
+        self.assertIsNone(stage)
+        self.assertEqual(list(self.runner.iterdir()), [])
+        self.assertEqual(outside.read_text(), "outside")
+        self.assertEqual(warning, "::warning::Debug files exceed staging resource limits; artifact upload skipped.\n")
+
+    def test_resource_limit_with_cleanup_failure_never_publishes_stage(self):
+        (self.run / "large.log").write_bytes(b"x" * 9)
+        module = self.helper()
+        with mock.patch.object(module.shutil, "rmtree", side_effect=OSError("attacker-path")):
+            warning, stage = self.limited_main(module, 8, 10)
+        self.assertIsNone(stage)
+        self.assertEqual(self.outputs.read_text(), "")
+        self.assertNotIn("attacker-path", warning)
+        self.assertIn("resource limits", warning)
+        self.assertIn("Incomplete debug staging files could not be removed", warning)
 
     def test_export_contains_only_private_regular_copies_of_run_files(self):
         (self.run / "nested").mkdir()

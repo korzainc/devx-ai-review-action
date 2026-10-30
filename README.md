@@ -151,6 +151,11 @@ credential files. Anyone with read access to the repository can download them.
 Publisher run files are not included in these artifacts. Normal console output
 remains in workflow logs.
 
+Debug staging accepts at most 256 MiB of regular-file contents and 10,000 tree
+entries, including directories and skipped entries. If either limit is exceeded,
+staging is abandoned with a warning and the debug artifact is skipped. The review
+and publishing results are unchanged.
+
 ## Outputs
 
 | Output | Description |

@@ -12,6 +12,14 @@ import stat
 import tempfile
 
 
+MAX_DEBUG_BYTES = 256 * 1024 * 1024
+MAX_DEBUG_ENTRIES = 10_000
+
+
+class DebugResourceLimit(ValueError):
+    """The artifact would exceed the host staging resource policy."""
+
+
 def open_directory(path):
     """Open every absolute path component without following directory links."""
     path = Path(path)
@@ -45,6 +53,7 @@ def copy_file(source, target, size):
 def copy_tree(source, destination):
     """Iterative descriptor walk; source names and errors are never logged."""
     copied, skipped = 0, False
+    copied_bytes, visited_entries = 0, 0
     # Each iterator and descriptor is owned by this stack until its frame ends.
     stack = []
     try:
@@ -58,6 +67,9 @@ def copy_tree(source, destination):
                 os.close(directory)
                 stack.pop()
                 continue
+            visited_entries += 1
+            if visited_entries > MAX_DEBUG_ENTRIES:
+                raise DebugResourceLimit("debug entry limit")
             before = os.stat(entry.name, dir_fd=directory, follow_symlinks=False)
             if stat.S_ISDIR(before.st_mode):
                 child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
@@ -82,6 +94,8 @@ def copy_tree(source, destination):
                 if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
                     skipped = True
                     continue
+                if before.st_size > MAX_DEBUG_BYTES - copied_bytes:
+                    raise DebugResourceLimit("debug byte limit")
                 copy_file(fd, target / entry.name, before.st_size)
                 after = os.fstat(fd)
                 if ((before.st_dev, before.st_ino, before.st_mode, before.st_nlink,
@@ -90,6 +104,7 @@ def copy_tree(source, destination):
                      after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
                     raise ValueError("source changed while copying")
                 copied += 1
+                copied_bytes += before.st_size
             finally:
                 os.close(fd)
         return copied, skipped
@@ -125,6 +140,8 @@ def main():
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
             stream.write("debug-dir=" + str(stage) + "\n")
         stage = None  # Keep the completed private snapshot for the upload step.
+    except DebugResourceLimit:
+        print("::warning::Debug files exceed staging resource limits; artifact upload skipped.")
     except (OSError, ValueError, KeyError, RuntimeError):
         print("::warning::Debug files could not be staged safely; artifact upload skipped.")
     finally:
