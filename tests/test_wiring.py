@@ -222,6 +222,19 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         run = subprocess.run(["bash", str(ROOT / "scripts/run.sh")],
                              env=dict(self.env, FIXTURE_SUMMARY_SYMLINK="1"),
                              text=True, capture_output=True, timeout=8)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        outputs = self.outputs()
+        self.assertEqual(outputs.get("review-completed"), "true")
+        self.assertEqual(outputs["verdict"], "pass")
+        engine_summary = Path(outputs["output-dir"]) / "summary.md"
+        self.assertTrue(engine_summary.is_symlink())
+        self.assertEqual(engine_summary.resolve(), host_target)
+        host_summary = Path(outputs["summary-file"])
+        self.assertFalse(host_summary.is_relative_to(Path(outputs["output-dir"])))
+        self.assertFalse(host_summary.is_symlink())
+        self.assertIn("### AI Code Review: pass", host_summary.read_text())
+        self.assertEqual((self.root / "summary").read_text(), host_summary.read_text())
+        self.assertTrue(Path(outputs["completion-file"]).is_file())
         self.assertEqual(host_target.read_text(), "preserve host file")
 
     def test_action_wires_publish_only_after_completed_review(self):
