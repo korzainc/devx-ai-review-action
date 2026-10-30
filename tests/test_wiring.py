@@ -138,6 +138,8 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
                 self.assertEqual(engine["env"]["REVIEW_TIMEOUT"], expected)
 
     def test_completed_pass_has_host_manifest_and_private_analysis_authority(self):
+        host_tokens = ("GITHUB_TOKEN", "GH_TOKEN", "REGISTRY_TOKEN")
+        self.env.update({name: "fixture-host-" + name for name in host_tokens})
         run = self.review()
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         outputs = self.outputs()
@@ -149,8 +151,20 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         calls = [json.loads(x) for x in (self.root / "analysis-calls").read_text().splitlines()]
         run_call = next(c for c in calls if "run" in c["args"])
         self.assertEqual(run_call["args"][-1], "action-review")
-        self.assertNotIn("GITHUB_TOKEN", [run_call["args"][i + 1]
-                           for i, item in enumerate(run_call["args"][:-1]) if item == "-e"])
+        env_args = [run_call["args"][i + 1]
+                    for i, item in enumerate(run_call["args"][:-1])
+                    if item in ("-e", "--env")]
+        env_args.extend(item.removeprefix("--env=") for item in run_call["args"]
+                        if item.startswith("--env="))
+        self.assertIn("ANTHROPIC_API_KEY", env_args)
+        self.assertEqual(run_call["env"]["ANTHROPIC_API_KEY"], self.env["ANTHROPIC_API_KEY"])
+        for token in host_tokens:
+            with self.subTest(token=token):
+                self.assertNotIn(token, run_call["env"])
+                self.assertFalse(any(value.split("=", 1)[0] == token for value in env_args),
+                                 "Host token passed to engine: " + token)
+                for value in run_call["args"] + list(run_call["env"].values()):
+                    self.assertNotIn(self.env[token], value)
 
     def test_completed_fail_remains_eligible_to_publish_and_blocking(self):
         self.fixture.action["verdict"] = {"status": "fail", "reason": "Blocking fixture",
