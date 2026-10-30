@@ -101,11 +101,13 @@ class ReusableTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             gh = base / "gh"
-            gh.write_text("#!" + sys.executable + "\n" + '''import os, pathlib, sys
+            gh.write_text("#!" + sys.executable + "\n" + '''import json, os, pathlib, sys
 record = pathlib.Path(os.environ["FIXTURE_COMMENT"])
 if sys.argv[1] == "api":
     if os.environ.get("FIXTURE_LIST_ERROR"): raise SystemExit(1)
-    print(record.read_text() if record.exists() else "")
+    comments = [{"body": record.read_text(), "user": {"login": "github-actions[bot]", "type": "Bot"}}] if record.exists() else []
+    if "--slurp" in sys.argv: print(json.dumps([comments]))
+    else: print(record.read_text() if record.exists() else "")
 elif sys.argv[1:3] == ["pr", "comment"]:
     record.write_text(sys.stdin.read())
     with record.with_suffix(".count").open("a") as stream: stream.write("posted\\n")
@@ -133,6 +135,52 @@ else: raise SystemExit(1)
                                     text=True, capture_output=True, timeout=5)
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((base / "comment").exists())
+
+    def test_hint_skips_prior_completed_bot_reviews_without_claiming_current_coverage(self):
+        hint = self.workflow().split("  hint:\n", 1)[1].split("  review:\n", 1)[0]
+        script = textwrap.dedent(hint.split("        run: |\n", 1)[1])
+        state = {"head": "a" * 40, "engine": "0.1.0", "at": "2026-10-30T12:00:00Z"}
+        def comment(state_value, login="github-actions[bot]", user_type="Bot", marker=True):
+            body = "<!-- devx-ai-review summary -->\n" if marker else "ordinary comment\n"
+            body += "<!-- devx-ai-review state " + json.dumps(state_value) + " -->"
+            return {"body": body, "user": {"login": login, "type": user_type}}
+        cases = [
+            ("no_reviews", [[]], True),
+            ("older_completed_review", [[comment(state)]], False),
+            ("empty_unfinished", [[comment(dict(state, unfinished=[]))]], False),
+            ("later_page", [[], [comment(state)]], False),
+            ("unfinished", [[comment(dict(state, unfinished=["src/file.py"]))]], True),
+            ("malformed_unfinished", [[comment(dict(state, unfinished=""))]], True),
+            ("invalid_head", [[comment(dict(state, head="not-a-commit"))]], True),
+            ("human_copy", [[comment(state, login="contributor", user_type="User")]], True),
+            ("other_bot", [[comment(state, login="other[bot]")]], True),
+            ("not_summary", [[comment(state, marker=False)]], True),
+            ("no_state", [[{"body": "<!-- devx-ai-review summary -->", "user": {"login": "github-actions[bot]", "type": "Bot"}}]], True),
+            ("invalid_json", [[{"body": "<!-- devx-ai-review summary -->\n<!-- devx-ai-review state {broken} -->", "user": {"login": "github-actions[bot]", "type": "Bot"}}]], True),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            gh = base / "gh"
+            gh.write_text("#!" + sys.executable + "\n" + '''import json, os, pathlib, sys
+if sys.argv[1] == "api":
+    pages = json.loads(os.environ["FIXTURE_PAGES"])
+    if "--slurp" in sys.argv: print(json.dumps(pages))
+    else: print("\\n".join(c["body"] for page in pages for c in page))
+elif sys.argv[1:3] == ["pr", "comment"]:
+    pathlib.Path(os.environ["FIXTURE_POST"]).write_text(sys.stdin.read())
+else: raise SystemExit(1)
+''')
+            gh.chmod(0o755)
+            for name, pages, should_post in cases:
+                with self.subTest(case=name):
+                    record = base / name
+                    env = dict(os.environ, PATH=str(base) + os.pathsep + os.environ["PATH"],
+                               GITHUB_REPOSITORY="fixture/repo", PR="7", GH_TOKEN="synthetic",
+                               FIXTURE_POST=str(record), FIXTURE_PAGES=json.dumps(pages))
+                    result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", script],
+                                            env=env, text=True, capture_output=True, timeout=5)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(record.exists(), should_post)
 
     def test_composite_is_bound_to_called_workflow_revision(self):
         source = self.workflow()

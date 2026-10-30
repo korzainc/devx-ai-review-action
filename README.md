@@ -20,6 +20,10 @@ Add [`examples/ai-review-reusable.yml`](examples/ai-review-reusable.yml) as
 workflow keeps the one-time PR hint, authorization, checkout and review steps in
 this repository. Only `/review` comments run the engine.
 
+The introductory hint is skipped if this PR already has a completed review
+summary from `github-actions[bot]`. This does not certify that later commits
+have been reviewed; the review check and summary show the reviewed revision.
+
 ```yaml
 on:
   issue_comment:

@@ -55,7 +55,7 @@ permissions:
   packages: read
 
 jobs:
-  # Tells the author how to ask for a review, once per PR.
+  # Introduces on-demand review once, unless this PR was already reviewed.
   hint:
     # Once per PR, when it is ready for review: opened as non-draft, or a draft marked ready.
     if: >-
@@ -72,9 +72,23 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
         run: |
-          comments="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --jq '.[].body')"
-          if grep -qF '<!-- devx-ai-review-hint -->' <<< "$comments"; then
+          comments="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --slurp)"
+          if jq -e 'any(.[][]; (.body // "") | contains("<!-- devx-ai-review-hint -->"))' <<< "$comments" > /dev/null; then
             echo "Review hint already posted on #$PR."
+            exit 0
+          fi
+          # This is onboarding history, not a claim that the current diff is covered.
+          if jq -e '
+            any(.[][];
+              .user.login == "github-actions[bot]" and .user.type == "Bot" and
+              ((.body // "") |
+                contains("<!-- devx-ai-review summary -->") and
+                (try (capture("<!-- devx-ai-review state (?<state>\\{[^\\n]*\\}) -->").state | fromjson |
+                  (.head | type == "string" and test("^[0-9a-fA-F]{40}$")) and
+                  ((has("unfinished") | not) or (.unfinished | type == "array" and length == 0)))
+                 catch false)))
+          ' <<< "$comments" > /dev/null; then
+            echo "Review already published on #$PR; no introduction needed."
             exit 0
           fi
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file - <<'MSG'
