@@ -59,9 +59,10 @@ inputs:
     default: "600"
   publish-timeout-seconds:
     description: >
-      Publisher time budget in seconds (1 through 3600), plus bounded termination cleanup.
-      The publisher paces itself to GitHub's content-creation rate limit and may wait up to
-      the engine's publish.max_wait_s (240 s) in all, so keep this above that.
+      Hard outer publisher timeout in seconds (1 through 3600), including container startup,
+      plus bounded termination cleanup. Passed unchanged to the engine, which reserves its
+      own shutdown margin. Allow for engine pacing and waiting (up to 240s by default).
+      Does not guarantee a summary or receipt under GitHub failures.
     required: false
     default: "360"
   upload-sarif:

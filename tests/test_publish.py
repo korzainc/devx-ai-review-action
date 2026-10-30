@@ -211,6 +211,18 @@ sys.exit(code)
             self.assertNotIn(forbidden, env)
         self.assertEqual(json.loads((self.root / "received.json").read_text()), self.result)
 
+    def test_custom_publish_timeout_is_forwarded_without_a_second_margin(self):
+        self.env["PUBLISH_TIMEOUT"] = "137"
+        result = self.run_publish()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        timeout_calls = [json.loads(line) for line in
+                         (self.root / "timeout-calls").read_text().splitlines()]
+        self.assertEqual(timeout_calls[0][:3], ["--signal=TERM", "--kill-after=5", "137"])
+        args = self.calls()[0]["argv"]
+        forwarded = [args[i + 1] for i, value in enumerate(args) if value == "-e"]
+        self.assertEqual([value for value in forwarded if value.startswith("PUBLISH_TIMEOUT=")],
+                         ["PUBLISH_TIMEOUT=137"])
+
     def test_validator_never_receives_token_model_or_registry_credentials(self):
         wrapper = self.root / "python3"
         wrapper.write_text("#!" + sys.executable + "\n" + '''import json, os, pathlib, sys

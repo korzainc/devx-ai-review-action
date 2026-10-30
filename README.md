@@ -140,10 +140,22 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `check-name` | `AI Code Review` | Name of the check run to require. |
 | `fail-on-error` | `false` | Report `failure` instead of `neutral` when the review cannot complete. |
 | `timeout-seconds` | `600` | Engine time budget, 1 through 3600. 30s past it the action sends TERM, then KILL 20s later. |
-| `publish-timeout-seconds` | `360` | Publisher time budget in seconds (1 through 3600), followed by bounded termination and cleanup. The publisher paces itself to GitHub's content-creation rate limit (about 15 comments a minute per run) and may wait up to 240 s in all, so a large review takes a few minutes; keep this above that. |
+| `publish-timeout-seconds` | `360` | Hard outer publisher timeout in seconds (1 through 3600), including container startup, followed by bounded termination and cleanup. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
 | `upload-debug` | `true` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. Set `false` to skip uploads. See the data note below. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
+
+The publish timeout is forwarded unchanged to the engine. A compatible engine reserves
+its own shutdown margin within that limit; the action does not subtract another one.
+The paired rate-limit engine uses 350s as its internal ceiling when given the default
+360s limit; its clock starts after container startup. This handoff requires an image
+with that timeout support; updating the action alone does not update its pinned engine.
+Container startup, GitHub delays or failures can still prevent a summary or receipt.
+The timeout bounds the attempt; it does not guarantee delivery.
+
+The paired rate-limit engine paces reviews to about 15 comments a minute per run and
+may wait up to 240s in total. Large reviews can take a few minutes; keep the outer
+timeout above the configured waiting budget.
 
 Debug artifacts contain unredacted source and model text, which may include sensitive
 content. The action does not deliberately attach the checkout, environment files or
