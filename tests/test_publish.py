@@ -318,6 +318,7 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
                 saved = json.loads(Path(outputs["receipt-file"]).read_text())
                 self.assertEqual(saved["posted_comments"], 2 - skipped)
                 self.assertEqual(saved["already_posted"], skipped)
+                (self.root / "final.json").unlink(missing_ok=True)
                 finalized = subprocess.run(["bash", str(SCRIPTS / "finalize.sh")],
                     env=dict(self.env, REVIEW_OUTCOME="success", VERDICT="pass",
                              REVIEW_COMPLETED="true", PUBLISH_OUTCOME="success",
