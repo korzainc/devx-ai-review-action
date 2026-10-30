@@ -2,7 +2,7 @@
 
 > **Pre-release.** The `pre-release` branch is for trying the action on a few
 > repos before v1. It pins the release-candidate engine image
-> (`ghcr.io/korzainc/devx-ai-review-pre-release`, engine `ce24c54`), and the inputs, outputs and
+> (`ghcr.io/korzainc/devx-ai-review-pre-release`, engine `4d288de`), and the inputs, outputs and
 > engine contract may still change.
 
 On-demand AI code review for pull requests. Comment `/review` on a PR and the
