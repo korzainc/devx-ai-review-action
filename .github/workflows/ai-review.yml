@@ -1,0 +1,137 @@
+# Reusable on-demand review for GitHub.com hosted runners (2.336.0+).
+name: AI Code Review
+
+on:
+  workflow_call:
+    inputs:
+      config:
+        description: Review configuration in the consuming repository.
+        type: string
+        default: .korza/review.yml
+      skills:
+        description: Optional comma-separated skills; otherwise use the review config.
+        type: string
+        default: ""
+      registry-username:
+        description: GHCR token owner; defaults to the triggering actor when omitted.
+        type: string
+        default: ""
+      timeout-seconds:
+        description: Engine time budget, from 1 through 3600 seconds.
+        type: string
+        default: "600"
+      check-name:
+        description: Name of the check posted on the reviewed commit.
+        type: string
+        default: AI Code Review
+      concurrency-prefix:
+        description: Prefix of the per-PR review cancellation group.
+        type: string
+        default: ai-review
+      job-timeout-minutes:
+        description: Overall job deadline, including preparation and publication.
+        type: number
+        default: 360
+      upload-debug:
+        description: Keep source and model debug artifacts for 14 days; false disables upload.
+        type: boolean
+        default: true
+      fail-on-error:
+        description: Whether an incomplete review fails the check instead of reporting neutral.
+        type: string
+        default: "false"
+    secrets:
+      ANTHROPIC_API_KEY:
+        description: Anthropic key used only by the review engine.
+        required: false
+      REGISTRY_TOKEN:
+        description: Optional pull-only GHCR credential when the job token cannot access the engine image.
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  packages: read
+
+jobs:
+  # Introduces on-demand review once, unless this PR was already reviewed.
+  hint:
+    # Once per PR, when it is ready for review: opened as non-draft, or a draft marked ready.
+    if: >-
+      github.event_name == 'pull_request' &&
+      ((github.event.action == 'opened' && !github.event.pull_request.draft) ||
+       github.event.action == 'ready_for_review') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment how to request a review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          comments="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate --slurp)"
+          if jq -e 'any(.[][]; (.body // "") | contains("<!-- devx-ai-review-hint -->"))' <<< "$comments" > /dev/null; then
+            echo "Review hint already posted on #$PR."
+            exit 0
+          fi
+          # This is onboarding history, not a claim that the current diff is covered.
+          if jq -e '
+            any(.[][];
+              .user.login == "github-actions[bot]" and .user.type == "Bot" and
+              ((.body // "") |
+                contains("<!-- devx-ai-review summary -->") and
+                (try (capture("<!-- devx-ai-review state (?<state>\\{[^\\n]*\\}) -->").state | fromjson |
+                  (.head | type == "string" and test("^[0-9a-fA-F]{40}$")) and
+                  ((has("unfinished") | not) or (.unfinished | type == "array" and length == 0)))
+                 catch false)))
+          ' <<< "$comments" > /dev/null; then
+            echo "Review already published on #$PR; no introduction needed."
+            exit 0
+          fi
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file - <<'MSG'
+          <!-- devx-ai-review-hint -->
+          💡 **DevX AI Review** is available on this PR. Comment `/review` to run it. Reviews run on demand only.
+
+          <details>
+          <summary>How it works</summary>
+
+          - Findings are posted as inline comments on the changed lines, often with a suggested fix.
+          - The result appears as a check on this PR.
+          - Comment `/review` again after new commits to re-run it.
+          - Only repository members and collaborators can trigger a review.
+
+          </details>
+          MSG
+
+  review:
+    # On demand only: a /review comment on a PR (reviews cost model tokens).
+    # Check the command and association before concurrency can cancel another run.
+    if: >-
+      !cancelled() &&
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.job-timeout-minutes }}
+    concurrency:
+      group: ${{ inputs.concurrency-prefix }}-${{ github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Resolve this repository root at the called workflow's exact revision.
+      - uses: $/
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          registry-token: ${{ secrets.REGISTRY_TOKEN || github.token }}
+          registry-username: ${{ inputs.registry-username || github.actor }}
+          config: ${{ inputs.config }}
+          skills: ${{ inputs.skills }}
+          timeout-seconds: ${{ inputs.timeout-seconds }}
+          fail-on-error: ${{ inputs.fail-on-error }}
+          upload-debug: ${{ inputs.upload-debug }}
+          check-name: ${{ inputs.check-name }}

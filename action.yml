@@ -57,14 +57,30 @@ inputs:
       20 seconds after that; the check then reports per fail-on-error.
     required: false
     default: "600"
+  publish-timeout-seconds:
+    description: >
+      Hard outer publisher timeout in seconds (1 through 3600), including container startup,
+      plus bounded termination cleanup. Passed unchanged to the engine, which reserves its
+      own shutdown margin. Allow for engine pacing and waiting (up to 240s by default).
+      Does not guarantee a summary or receipt under GitHub failures.
+    required: false
+    default: "360"
   upload-sarif:
     description: Also upload findings to GitHub code scanning (needs security-events write).
     required: false
     default: "false"
+  upload-debug:
+    description: >
+      Keep review-stage logs, model calls, findings and inputs as a workflow artifact
+      for up to 14 days. Raw source and model text may contain sensitive content. No checkout,
+      environment files or credential files are deliberately attached. Publisher run files
+      are not included; normal console output remains in workflow logs.
+    required: false
+    default: "true"
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false
-    default: ghcr.io/korzainc/ai-review@sha256:REPLACE_WITH_RELEASE_DIGEST
+    default: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.0-rc3-4d288de@sha256:11dd413d80f3bb13f37b0d8dc653f2ca514e7bae2568807df82f0801a6267723
 
 outputs:
   verdict:
@@ -79,6 +95,12 @@ outputs:
   check-run-id:
     description: ID of the check run created on the PR head commit.
     value: ${{ steps.prep.outputs.check-run-id }}
+  delivery:
+    description: success after a verified summary-comment receipt, error on failed delivery, or skipped when publishing did not run.
+    value: ${{ steps.publish.outputs.delivery || 'skipped' }}
+  summary-url:
+    description: Verified summary comment URL when delivery succeeded.
+    value: ${{ steps.publish.outputs.summary-url }}
 
 runs:
   using: composite
@@ -106,8 +128,8 @@ runs:
       if: steps.prep.outputs.run == 'true'
       shell: bash
       env:
+        GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
-        GITHUB_TOKEN: ${{ inputs.github-token }}
         REVIEW_IMAGE: ${{ inputs.image }}
         REVIEW_CONFIG: ${{ inputs.config }}
         REVIEW_SKILLS: ${{ inputs.skills }}
@@ -123,12 +145,35 @@ runs:
     # A cancelled job kills run.sh outright, so its own cleanup never runs and
     # the engine container outlives the docker client. On a persistent
     # self-hosted runner it would keep running, and spending the API key.
-    - name: Remove engine container
+    # The name comes from prep, so it is known even if run.sh never wrote outputs.
+    - name: Clean up review container
       if: always() && steps.prep.outputs.engine-container != ''
       shell: bash
       env:
         ENGINE_CONTAINER: ${{ steps.prep.outputs.engine-container }}
-      run: docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
+      run: timeout --signal=TERM --kill-after=5 10 docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
+
+    - name: Publish review
+      id: publish
+      if: always() && !cancelled() && steps.review.outputs.review-completed == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PUBLISH_TIMEOUT: ${{ inputs.publish-timeout-seconds }}
+        REVIEW_IMAGE: ${{ inputs.image }}
+        OUTPUT_DIR: ${{ steps.review.outputs.output-dir }}
+        REVIEW_COMPLETION_FILE: ${{ steps.review.outputs.completion-file }}
+        PR_NUMBER: ${{ steps.prep.outputs.pr-number }}
+        BASE_SHA: ${{ steps.prep.outputs.base-sha }}
+        HEAD_SHA: ${{ steps.prep.outputs.head-sha }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/publish.sh"
+
+    - name: Clean up publisher container
+      if: always() && steps.publish.outputs.publisher-container != ''
+      shell: bash
+      env:
+        PUBLISHER_CONTAINER: ${{ steps.publish.outputs.publisher-container }}
+      run: timeout --signal=TERM --kill-after=5 10 docker rm -f "$PUBLISHER_CONTAINER" > /dev/null 2>&1 || true
 
     - name: Complete check
       if: always() && steps.prep.outputs.check-run-id != ''
@@ -138,9 +183,14 @@ runs:
         CHECK_RUN_ID: ${{ steps.prep.outputs.check-run-id }}
         REVIEW_OUTCOME: ${{ steps.review.outcome }}
         VERDICT: ${{ steps.review.outputs.verdict }}
-        OUTPUT_DIR: ${{ steps.review.outputs.output-dir }}
-        BLOCKING_PROCESS_FAILURE: ${{ steps.review.outputs.blocking-process-failure }}
+        REVIEW_COMPLETED: ${{ steps.review.outputs.review-completed }}
+        JOB_CANCELLED: ${{ job.status == 'cancelled' }}
+        PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
+        DELIVERY: ${{ steps.publish.outputs.delivery }}
         FAIL_ON_ERROR: ${{ inputs.fail-on-error }}
+        SUMMARY_FILE: ${{ steps.review.outputs.summary-file }}
+        RESULT_FILE: ${{ steps.review.outputs.result-file }}
+        BLOCKING_PROCESS_FAILURE: ${{ steps.review.outputs.blocking-process-failure }}
       run: bash "$GITHUB_ACTION_PATH/scripts/finalize.sh"
 
     - name: Log out of GHCR
@@ -154,3 +204,22 @@ runs:
       with:
         sarif_file: ${{ steps.review.outputs.sarif-file }}
         category: korza-ai-review
+
+    # Snapshot regular debug files outside the engine mount before uploading.
+    # Source and model text are not redacted.
+    - name: Stage debug files
+      id: debug
+      if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != ''
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ steps.review.outputs.output-dir }}
+      run: env -i PATH="$PATH" OUTPUT_DIR="$OUTPUT_DIR" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" python3 -I "$GITHUB_ACTION_PATH/scripts/stage_debug.py"
+
+    - name: Upload debug files
+      if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != '' && steps.debug.outputs.debug-dir != ''
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ai-review-pr${{ steps.prep.outputs.pr-number }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.debug.outputs.debug-dir }}
+        retention-days: 14
+        if-no-files-found: ignore

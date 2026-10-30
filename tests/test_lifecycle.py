@@ -10,6 +10,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,19 +19,22 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SARIF = '{"version":"2.1.0","runs":[]}'
+HEAD, BASE = "a" * 40, "c" * 40
+IMAGE = "ghcr.io/example/engine@sha256:" + "b" * 64
 
 
 def result(status, findings=None):
     return json.dumps({
         "contract_version": 1,
         "verdict": {"status": status, "reason": "Fixture " + status,
-                    "blocking_findings": ["example"] if status == "fail" else []},
-        "findings": findings or [], "skills_run": ["fixture"],
+                    "blocking_findings": [f["id"] for f in findings or [] if f["enforcing"]]
+                                         if status == "fail" else []},
+        "findings": findings or [], "skills_run": ["bug-hunter"],
         "provenance": {"engine_version": "fixture", "image_digest": "", "model": "none"},
     })
 
 
-FINDING = {"id": "example", "rule_id": "fixture/check", "skill": "fixture",
+FINDING = {"id": "example", "rule_id": "bug-hunter/check", "skill": "bug-hunter",
            "severity": "high", "confidence": 1, "enforcing": True,
            "location": {"path": "file.py", "start_line": 2, "end_line": 2},
            "message": "Fixture finding", "suggestion": ""}
@@ -50,9 +54,44 @@ if args[:2] == ["rm", "-f"]:
 assert args[:4] == ["run", "--rm", "--init", "--name"], args
 assert args[4] == os.environ["ENGINE_CONTAINER"], args
 assert "KORZA_CONTRACT_VERSION=1" in args, args
+assert args[-1] == "action-review", args
 mounts = [args[i+1] for i, arg in enumerate(args[:-1]) if arg == "-v"]
 out = pathlib.Path(next(m[:-len(":/github/out")] for m in mounts if m.endswith(":/github/out")))
 pathlib.Path(os.environ["DOCKER_RECORD"]).write_text(str(out))
+# What the engine would see of earlier reviews: the env and the mounted file.
+prior = next((m.rsplit(":", 2)[0] for m in mounts if m.endswith(":/github/prior.json:ro")), None)
+pathlib.Path(os.environ["DOCKER_RECORD"] + ".prior").write_text(json.dumps({
+    "env": "REVIEW_PRIOR=/github/prior.json" in args,
+    "token": (any(a.startswith(("GITHUB_TOKEN", "GH_TOKEN")) for a in args)
+              or any(os.environ.get(key) for key in ("GITHUB_TOKEN", "GH_TOKEN"))),
+    "file": json.loads(pathlib.Path(prior).read_text()) if prior else None,
+}))
+
+
+def write_handoff(out, text):
+    # The typed publisher handoff an engine writes next to result.json.
+    try:
+        top = json.loads(text)
+    except ValueError:
+        return
+    found = top.get("findings") if isinstance(top, dict) else None
+    typed = [{"id": f["id"], "reviewer": f["skill"], "unit_id": "u1",
+              "file": f["location"]["path"], "start_line": f["location"]["start_line"],
+              "end_line": f["location"]["end_line"], "severity": f["severity"],
+              "category": "bug", "title": f["message"], "body": f["message"],
+              "confidence": f["confidence"]}
+             for f in found if isinstance(f, dict)] if isinstance(found, list) else []
+    (out / "publish").mkdir()
+    (out / "publish/result.json").write_text(json.dumps({
+        "schema_version": 1, "run_id": "review-1", "head_sha": os.environ["HEAD_SHA"],
+        "findings": typed, "provenance": {"package_version": "0", "provider": "fixture"}}))
+    (out / "publish/snapshot.json").write_text(json.dumps({
+        "schema_version": 1, "provider": "github", "repo": os.environ["GITHUB_REPOSITORY"],
+        "pr": {"number": int(os.environ["PR_NUMBER"]), "url": "https://github.com/fixture/repo/pull/7",
+               "title": "Fixture"},
+        "refs": {"base_ref": "main", "base_sha": os.environ["BASE_SHA"], "head_ref": "branch",
+                 "head_sha": os.environ["HEAD_SHA"], "merge_base_sha": os.environ["BASE_SHA"]},
+        "diff_path": "diff.patch", "workspace": "/workspace"}))
 '''
 
 
@@ -60,7 +99,9 @@ class LifecycleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
+        # Resolved: the host reads engine output without following symlinks,
+        # and macOS temp dirs sit under one (/var -> /private/var).
+        self.base = Path(self.temp.name).resolve()
         for name in ("bin", "home", "runner", "workspace"):
             (self.base / name).mkdir()
         (self.base / "event.json").write_text('{"number":1}')
@@ -71,11 +112,20 @@ class LifecycleTests(unittest.TestCase):
             "GITHUB_WORKSPACE": str(self.base / "workspace"),
             "GITHUB_EVENT_PATH": str(self.base / "event.json"),
             "GITHUB_REPOSITORY": "fixture/repo", "GITHUB_SERVER_URL": "https://github.invalid",
-            "GITHUB_RUN_ID": "42", "CHECK_RUN_ID": "7", "REVIEW_IMAGE": "fixture:offline",
+            "GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1", "CHECK_RUN_ID": "7", "REVIEW_IMAGE": IMAGE,
+            "PR_NUMBER": "7", "HEAD_SHA": HEAD, "BASE_SHA": BASE,
             "ENGINE_CONTAINER": "korza-review-fixture", "REVIEW_TIMEOUT": "600",
             "FAKE_RESULT": "", "FAKE_EXIT": "0", "FAKE_SARIF": "", "FAKE_KIND": "file",
             "FAKE_PULL_EXIT": "0", "FAKE_PLANT": "",
         }
+        if sys.platform == "darwin":
+            # Model the command boundary on macOS, which lacks GNU timeout.
+            # Deadline/process-group behavior requires separate native checks.
+            self.executable("timeout", '''import os, sys
+args = sys.argv[1:]
+while args[0].startswith("--"): args = args[1:]
+os.execvp(args[1], args[1:])
+''')
         self.executable("docker", DOCKER_PRELUDE + '''
 assert os.environ["GITHUB_WORKSPACE"] + ":/workspace:ro" in mounts
 assert os.environ["GITHUB_EVENT_PATH"] + ":/github/event.json:ro" in mounts
@@ -89,12 +139,38 @@ elif os.environ["FAKE_KIND"] == "directory":
     (out / "result.json").mkdir()
 elif os.environ["FAKE_RESULT"]:
     (out / "result.json").write_text(os.environ["FAKE_RESULT"])
+    write_handoff(out, os.environ["FAKE_RESULT"])
 if os.environ["FAKE_SARIF"] and not os.environ["FAKE_PLANT"]:
     (out / "results.sarif").write_text(os.environ["FAKE_SARIF"])
 sys.exit(int(os.environ["FAKE_EXIT"]))
 ''')
         self.executable("gh", '''import json, os, pathlib, sys
-assert sys.argv[1:] == ["api", "-X", "PATCH", "repos/fixture/repo/check-runs/7", "--input", "-"], sys.argv
+args = sys.argv[1:]
+if args[:1] == ["api"] and "-X" not in args:  # run.sh reading what earlier reviews left
+    import time
+    time.sleep(float(os.environ.get("FAKE_GH_DELAY", "0")))
+    if os.environ.get("FAKE_REQUIRE_GH_TOKEN") and os.environ.get("GH_TOKEN") != "fixture-host-token":
+        sys.exit(1)
+    if os.environ.get("FAKE_GH_FAIL"):
+        sys.exit(1)
+    path = args[1]
+    if path == "repos/fixture/repo/pulls/7/comments":
+        print(os.environ.get("FAKE_REVIEW_COMMENTS", "[[]]"))
+    elif path == "repos/fixture/repo/issues/7/comments":
+        print(os.environ.get("FAKE_ISSUE_COMMENTS", "[[]]"))
+    elif path.startswith("repos/fixture/repo/compare/"):
+        if os.environ.get("FAKE_COMPARE_RECORD"):
+            with open(os.environ["FAKE_COMPARE_RECORD"], "a") as stream:
+                stream.write(path + "\\n")
+        answers = json.loads(os.environ.get("FAKE_COMPARES") or "{}")  # "base...head" -> body
+        body = answers.get(path.rsplit("/", 1)[1], os.environ.get("FAKE_COMPARE"))
+        if body is None:
+            sys.exit(1)
+        print(body if isinstance(body, str) else json.dumps(body))
+    else:
+        sys.exit("unexpected gh call: " + " ".join(args))
+    sys.exit(0)
+assert args == ["api", "-X", "PATCH", "repos/fixture/repo/check-runs/7", "--input", "-"], sys.argv
 payload = json.load(sys.stdin)
 pathlib.Path(os.environ["GH_RECORD"]).write_text(json.dumps(payload))
 ''')
@@ -132,6 +208,10 @@ pathlib.Path(os.environ["GH_RECORD"]).write_text(json.dumps(payload))
         values = {"inputs.github-token": "", "inputs.fail-on-error": env["FAIL_ON_ERROR"],
                   "steps.prep.outputs.check-run-id": "7", "steps.review.outcome": outcome or "success"}
         values.update({"steps.review.outputs." + key: value for key, value in outputs.items()})
+        if outputs.get("review-completed") == "true":
+            # Publishing is covered by test_publish; here it delivered.
+            values.update({"steps.publish.outcome": "success",
+                           "steps.publish.outputs.delivery": "success"})
         final_env = dict(env, GH_RECORD=str(self.base / (Path(env["GITHUB_OUTPUT"]).stem + ".patch")))
         for key, expression in re.findall(r"^        ([A-Z_]+): \$\{\{ ([^}]+) \}\}$", step, re.M):
             final_env[key] = values.get(expression.strip(), "")
@@ -340,7 +420,8 @@ sys.exit(17)
 
     def test_contract_version_is_required_but_never_unblocks_a_fail(self):
         for version, status, conclusion in ((None, "pass", "neutral"), (2, "pass", "neutral"),
-                                            ("1.4", "pass", "success"), (None, "fail", "failure")):
+                                            ("1", "pass", "neutral"), (None, "fail", "failure"),
+                                            (1, "pass", "success")):
             payload = json.loads(result(status))
             if version is None:
                 del payload["contract_version"]
@@ -370,7 +451,7 @@ sys.exit(17)
                 _, outputs, directory, _ = self.lifecycle(content, code, FAKE_PLANT=str(victim), name="plant")
                 self.assertEqual(victim.read_text(), "ORIGINAL")
                 self.assertNotIn("sarif-file", outputs)
-                self.assertFalse((directory / "summary.md").is_symlink())
+                self.assertFalse(Path(outputs["summary-file"]).is_relative_to(directory))
 
     def test_fail_reason_cannot_inject_workflow_commands(self):
         payload = json.loads(result("fail", [FINDING]))
@@ -379,9 +460,213 @@ sys.exit(17)
         self.assertEqual(proc.returncode, 1)
         self.assertEqual(outputs["verdict"], "fail")
         self.assertEqual(patch["conclusion"], "failure")
-        command_lines = [line for line in proc.stdout.splitlines() if line.startswith("::")]
-        self.assertEqual(len(command_lines), 1, command_lines)
-        self.assertIn("%0A::add-mask::", command_lines[0])
+        self.assertNotIn("fixture-injected", proc.stdout + proc.stderr)
+        self.assertIn(payload["verdict"]["reason"], patch["output"]["summary"])
+
+
+    def prior_seen(self, **extra):
+        proc, _outputs, _directory, env = self.run_review(result("pass"), **extra)
+        return proc, json.loads(Path(env["DOCKER_RECORD"] + ".prior").read_text())
+
+    def test_review_step_token_authenticates_history_without_reaching_engine(self):
+        # Resolve only Review's composite env. A token on Prepare or Finalize
+        # cannot authenticate this step or its exported fetch child.
+        action = (ROOT / "action.yml").read_text()
+        step = action.split("    - name: Review\n", 1)[1].split("    - name:", 1)[0]
+        values = {"inputs.github-token": "fixture-host-token"}
+        review_env = {key: values[expression.strip()]
+                      for key, expression in re.findall(
+                          r"^        ([A-Z_]+): \$\{\{ ([^}]+) \}\}$", step, re.M)
+                      if expression.strip() in values}
+        review_env["FAKE_REQUIRE_GH_TOKEN"] = "1"
+        proc, seen = self.prior_seen(**review_env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(seen["env"], proc.stdout)
+        self.assertIsNotNone(seen["file"])
+        self.assertFalse(seen["token"])
+        self.assertNotIn("fixture-host-token", json.dumps(seen["file"]))
+
+    def test_first_review_passes_earlier_comments_without_a_changed_set(self):
+        review = [[{"id": 1, "body": "x <!-- devx-ai-review id=dar-1 -->"}]]
+        proc, seen = self.prior_seen(FAKE_REVIEW_COMMENTS=json.dumps(review))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertTrue(seen["env"])
+        self.assertFalse(seen["token"])
+        self.assertEqual(seen["file"]["review_comments"], review)
+        self.assertNotIn("changed_since", seen["file"])  # no summary yet: a first review
+
+    def test_re_review_passes_files_changed_since_the_last_reviewed_commit(self):
+        state = '<!-- devx-ai-review state {"head":"' + "c" * 40 + '","engine":"1"} -->'
+        summary = [[{"id": 9, "user": {"type": "Bot"},
+                     "body": "Summary\n\n<!-- devx-ai-review summary -->\n" + state}]]
+        compare = {"status": "ahead", "merge_base_commit": {"sha": "c" * 40},
+                   "files": [{"filename": "a.py", "sha": "1", "status": "modified"}]}
+        _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                                      FAKE_COMPARE=json.dumps(compare))
+        self.assertEqual(seen["file"]["changed_since"], {
+            "base": "c" * 40, "status": "ahead", "snapshot_diff": True, "files": ["a.py"]})
+
+    def test_after_a_force_push_only_files_that_differ_are_passed(self):
+        last, merge_base = "c" * 40, "d" * 40
+        state = '<!-- devx-ai-review state {"head":"' + last + '","unfinished":["u.py"]} -->'
+        summary = [[{"id": 9, "user": {"type": "Bot"},
+                     "body": "<!-- devx-ai-review summary -->\n" + state}]]
+
+        def f(name, sha, status="modified"):
+            return {"filename": name, "sha": sha, "status": status}
+
+        compares = {  # Common merge base: a.py has the same blob on both sides; b.py differs
+            f"{last}...{HEAD}": {"status": "diverged", "merge_base_commit": {"sha": merge_base},
+                                 "files": [f("a.py", "1"), f("b.py", "2"), f("gone.py", "", "removed")]},
+            f"{merge_base}...{last}": {"status": "ahead", "merge_base_commit": {"sha": merge_base},
+                            "files": [f("a.py", "1"), f("b.py", "9"), f("old.py", "3")]},
+        }
+        _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                                      FAKE_COMPARES=json.dumps(compares))
+        self.assertEqual(seen["file"]["changed_since"], {
+            "base": last, "status": "diverged", "snapshot_diff": True,
+            "files": ["b.py", "gone.py", "old.py"]})
+
+    def test_overlapping_renames_preserve_every_changed_destination(self):
+        last, base = "c" * 40, "d" * 40
+        state = '<!-- devx-ai-review state {"head":"' + last + '"} -->'
+        summary = [[{"user": {"type": "Bot"},
+                     "body": "<!-- devx-ai-review summary -->\n" + state}]]
+        # Base a=A,b=B; last b=B; head a=B,c=A. A rename source can also
+        # be another rename's destination, so a tombstone must not erase it.
+        renames = [{"filename": "a.py", "previous_filename": "b.py",
+                    "status": "renamed", "sha": "B"},
+                   {"filename": "c.py", "previous_filename": "a.py",
+                    "status": "renamed", "sha": "A"}]
+        for index, files in enumerate((renames, list(reversed(renames)))):
+            with self.subTest(order=index):
+                compares = {
+                    f"{last}...{HEAD}": {"status": "diverged",
+                        "merge_base_commit": {"sha": base}, "files": files},
+                    f"{base}...{last}": {"status": "ahead",
+                        "merge_base_commit": {"sha": base},
+                        "files": [{"filename": "a.py", "status": "removed", "sha": ""}]},
+                }
+                _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                                             FAKE_COMPARES=json.dumps(compares))
+                self.assertEqual(seen["file"]["changed_since"]["files"],
+                                 ["a.py", "b.py", "c.py"])
+
+    def test_malformed_compare_file_lists_fall_back_to_full_review(self):
+        last, base = "c" * 40, "d" * 40
+        summary = [[{"user": {"type": "Bot"}, "body":
+                    '<!-- devx-ai-review summary -->\n<!-- devx-ai-review state '
+                    + json.dumps({"head": last}) + ' -->'}]]
+        for side in ("head", "last"):
+            for shape in ("missing", "null", "object"):
+                with self.subTest(side=side, shape=shape):
+                    head = {"status": "diverged", "merge_base_commit": {"sha": base},
+                            "files": []}
+                    old = {"status": "ahead", "merge_base_commit": {"sha": base},
+                           "files": []}
+                    malformed = head if side == "head" else old
+                    if shape == "missing":
+                        del malformed["files"]
+                    else:
+                        malformed["files"] = None if shape == "null" else {}
+                    proc, seen = self.prior_seen(
+                        FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                        FAKE_COMPARES=json.dumps({f"{last}...{HEAD}": head,
+                                                  f"{base}...{last}": old}))
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    self.assertNotIn("changed_since", seen["file"])
+
+    def test_copied_source_deletion_remains_in_snapshot_diff(self):
+        last, base = "c" * 40, "d" * 40
+        summary = [[{"user": {"type": "Bot"}, "body":
+                    '<!-- devx-ai-review summary -->\n<!-- devx-ai-review state '
+                    + json.dumps({"head": last}) + ' -->'}]]
+        # Base src=A; last src=A,dst=A (copy); head empty (src removed).
+        # Copying src must not claim src was already absent in the last snapshot.
+        compares = {
+            f"{last}...{HEAD}": {"status": "diverged", "merge_base_commit": {"sha": base},
+                "files": [{"filename": "src.py", "sha": "", "status": "removed"}]},
+            f"{base}...{last}": {"status": "ahead", "merge_base_commit": {"sha": base},
+                "files": [{"filename": "dst.py", "previous_filename": "src.py",
+                           "sha": "A", "status": "copied"}]},
+        }
+        proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                                     FAKE_COMPARES=json.dumps(compares))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(seen["file"]["changed_since"]["files"], ["dst.py", "src.py"])
+
+    def test_invalid_saved_head_never_becomes_an_authenticated_compare_path(self):
+        for index, last in enumerate(("not-a-sha", "refs/heads/main")):
+            with self.subTest(last=last):
+                summary = [[{"user": {"type": "Bot"}, "body":
+                            '<!-- devx-ai-review summary -->\n<!-- devx-ai-review state '
+                            + json.dumps({"head": last}) + ' -->'}]]
+                record = self.base / ("invalid-head-" + str(index))
+                proc, seen = self.prior_seen(
+                    GH_TOKEN="fixture-host-token", FAKE_REQUIRE_GH_TOKEN="1",
+                    FAKE_COMPARE_RECORD=str(record), FAKE_ISSUE_COMMENTS=json.dumps(summary))
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertTrue(seen["env"])
+                self.assertNotIn("changed_since", seen["file"])
+                self.assertFalse(record.exists(), "Invalid saved head reached authenticated gh")
+
+    def test_invalid_merge_base_stops_before_a_second_compare(self):
+        last = "c" * 40
+        summary = [[{"user": {"type": "Bot"}, "body":
+                    '<!-- devx-ai-review summary -->\n<!-- devx-ai-review state '
+                    + json.dumps({"head": last}) + ' -->'}]]
+        for index, base in enumerate(("m", "refs/heads/main", None)):
+            with self.subTest(base=base):
+                record = self.base / ("invalid-base-" + str(index))
+                head = {"status": "diverged", "merge_base_commit": {"sha": base}, "files": []}
+                proc, seen = self.prior_seen(
+                    GH_TOKEN="fixture-host-token", FAKE_REQUIRE_GH_TOKEN="1",
+                    FAKE_COMPARE_RECORD=str(record), FAKE_ISSUE_COMMENTS=json.dumps(summary),
+                    FAKE_COMPARES=json.dumps({f"{last}...{HEAD}": head}))
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertNotIn("changed_since", seen["file"])
+                self.assertEqual(record.read_text().splitlines(),
+                                 [f"repos/fixture/repo/compare/{last}...{HEAD}"])
+
+    def test_force_pushed_last_commit_leaves_the_changed_set_out(self):
+        state = '<!-- devx-ai-review state {"head":"' + "c" * 40 + '"} -->'
+        summary = [[{"id": 9, "user": {"type": "Bot"},
+                     "body": "<!-- devx-ai-review summary -->\n" + state}]]
+        _proc, seen = self.prior_seen(FAKE_ISSUE_COMMENTS=json.dumps(summary))  # compare fails
+        self.assertNotIn("changed_since", seen["file"])
+        self.assertTrue(seen["env"])
+
+    def test_slow_history_exhausts_one_budget_and_runs_without_prior(self):
+        # Each request completes within the deadline, but together they exceed
+        # it. This catches missing deadlines and separate per-request budgets.
+        native = shutil.which("gtimeout") or shutil.which("timeout")
+        if not native:
+            self.skipTest("GNU timeout is required for the native deadline regression")
+        version = subprocess.run([native, "--version"], capture_output=True, text=True)
+        if version.returncode or "GNU coreutils" not in version.stdout:
+            self.skipTest("GNU timeout is required for the native deadline regression")
+        # Accelerate only the external clock boundary, retaining GNU timeout's
+        # real process-group cancellation and the real Bash fetch function.
+        wrapper = "import os, sys\nargs = sys.argv[1:]\n"
+        wrapper += "if 'bash' in args: args[args.index('bash') - 1] = '0.5'\n"
+        wrapper += "os.execv(" + repr(native) + ", [" + repr(native) + "] + args)\n"
+        self.executable("timeout", wrapper)
+        proc, outputs, _directory, env = self.run_review(
+            result("pass"), FAKE_GH_DELAY="0.35")
+        seen = json.loads(Path(env["DOCKER_RECORD"] + ".prior").read_text())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(seen["env"])
+        self.assertIsNone(seen["file"])
+        self.assertEqual(outputs["review-completed"], "true")
+        self.assertEqual(outputs["verdict"], "pass")
+        self.assertIn("Could not read earlier reviews", proc.stdout)
+
+    def test_unreadable_earlier_reviews_still_review_everything(self):
+        proc, seen = self.prior_seen(FAKE_GH_FAIL="1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertFalse(seen["env"])
+        self.assertIsNone(seen["file"])
+        self.assertIn("Could not read earlier reviews", proc.stdout)
 
 
 if __name__ == "__main__":
