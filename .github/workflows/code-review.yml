@@ -12,7 +12,7 @@ permissions:
 jobs:
   review:
     if: ${{ !cancelled() && (github.event_name == 'pull_request' || contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body)) }}
-    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@fd3a113efc7988149259024c0542eb0d04d9aa22
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@8c105e5d637441c3cdfa184f8e90a60fdf7e4443
     with:
       fail-on-error: 'true'
       job-timeout-minutes: 25
