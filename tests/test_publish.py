@@ -193,8 +193,12 @@ sys.exit(code)
         args, env = self.calls()[0]["argv"], self.calls()[0]["env"]
         self.assertEqual(args[-2:], [IMAGE, "action-publish"])
         forwarded = [args[i + 1] for i, value in enumerate(args) if value == "-e"]
-        self.assertEqual(set(forwarded), {"GITHUB_TOKEN", "GITHUB_REPOSITORY", "PR_NUMBER",
-                                         "REVIEW_OUTPUT_DIR=/github/out", "KORZA_CONTRACT_VERSION=1"})
+        timeout = next(f for f in forwarded if f.startswith("PUBLISH_TIMEOUT="))
+        self.assertEqual(set(forwarded) - {timeout},
+                         {"GITHUB_TOKEN", "GITHUB_REPOSITORY", "PR_NUMBER",
+                          "REVIEW_OUTPUT_DIR=/github/out", "KORZA_CONTRACT_VERSION=1"})
+        # the engine sizes its rate-limit waiting to this, so it matches the step's own limit
+        self.assertEqual(timeout, "PUBLISH_TIMEOUT=" + self.env.get("PUBLISH_TIMEOUT", "360"))
         self.assertEqual(args.count("-v"), 2)
         mounts = [args[i+1] for i, arg in enumerate(args) if arg == "-v"]
         self.assertTrue(mounts[0].endswith(":/github/out/publish:ro"))
@@ -206,6 +210,18 @@ sys.exit(code)
                           "REGISTRY_TOKEN", "GH_TOKEN", "HOME", "GITHUB_WORKSPACE"):
             self.assertNotIn(forbidden, env)
         self.assertEqual(json.loads((self.root / "received.json").read_text()), self.result)
+
+    def test_custom_publish_timeout_is_forwarded_without_a_second_margin(self):
+        self.env["PUBLISH_TIMEOUT"] = "137"
+        result = self.run_publish()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        timeout_calls = [json.loads(line) for line in
+                         (self.root / "timeout-calls").read_text().splitlines()]
+        self.assertEqual(timeout_calls[0][:3], ["--signal=TERM", "--kill-after=5", "137"])
+        args = self.calls()[0]["argv"]
+        forwarded = [args[i + 1] for i, value in enumerate(args) if value == "-e"]
+        self.assertEqual([value for value in forwarded if value.startswith("PUBLISH_TIMEOUT=")],
+                         ["PUBLISH_TIMEOUT=137"])
 
     def test_validator_never_receives_token_model_or_registry_credentials(self):
         wrapper = self.root / "python3"

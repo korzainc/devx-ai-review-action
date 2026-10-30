@@ -13,7 +13,7 @@ for name in OUTPUT_DIR REVIEW_COMPLETION_FILE REVIEW_IMAGE GITHUB_REPOSITORY PR_
     exit 1
   fi
 done
-publish_timeout="${PUBLISH_TIMEOUT:-120}"
+publish_timeout="${PUBLISH_TIMEOUT:-360}"
 if [[ ! "$publish_timeout" =~ ^[1-9][0-9]{0,3}$ ]] || [ "$publish_timeout" -gt 3600 ]; then
   echo "::error::publish-timeout-seconds must be 1 through 3600."
   exit 1
@@ -65,6 +65,7 @@ env -i PATH="$PATH" GITHUB_TOKEN="$GITHUB_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPO
   docker run --rm --init --name "$publisher_container" --pull=never --user "$(id -u):$(id -g)" \
   -v "$stage/publish:/github/out/publish:ro" -v "$stage/run:/github/out/run:rw" \
   -e GITHUB_TOKEN -e GITHUB_REPOSITORY -e PR_NUMBER \
+  -e PUBLISH_TIMEOUT="$publish_timeout" \
   -e REVIEW_OUTPUT_DIR=/github/out -e KORZA_CONTRACT_VERSION=1 \
   "$REVIEW_IMAGE" action-publish &
 publisher_pid=$!
