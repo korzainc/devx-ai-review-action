@@ -324,25 +324,47 @@ pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdi
         out.mkdir()
         (out / "result.json").write_text(json.dumps({"verdict": {"reason": "Fixture verdict"}}))
         (out / "summary.md").write_text("Fixture summary")
-        for verdict, review_outcome, delivery, publish_outcome, expected in (
-            ("pass", "success", "success", "success", "success"),
-            ("pass", "success", "error", "failure", "failure"),
-            ("fail", "failure", "success", "success", "failure"),
-            ("fail", "cancelled", "error", "cancelled", "cancelled"),
-            ("pass", "success", "error", "cancelled", "cancelled"),
+        for verdict, review_outcome, delivery, publish_outcome, cancelled, expected, warning in (
+            ("pass", "success", "success", "success", "false", "success", False),
+            ("pass", "success", "error", "failure", "false", "failure", True),
+            ("pass", "success", "success", "failure", "false", "failure", True),
+            ("fail", "failure", "success", "failure", "false", "failure", True),
+            ("fail", "failure", "success", "success", "false", "failure", False),
+            ("pass", "success", "", "skipped", "false", "failure", True),
+            ("fail", "failure", "error", "cancelled", "true", "cancelled", True),
+            ("pass", "success", "error", "cancelled", "true", "cancelled", True),
+            ("pass", "success", "", "skipped", "true", "cancelled", False),
+            ("pass", "success", "", "", "true", "cancelled", False),
+            ("pass", "success", "success", "success", "true", "cancelled", False),
+            ("pass", "success", "", "cancelled", "true", "cancelled", True),
+            ("pass", "success", "success", "cancelled", "true", "cancelled", True),
+            ("pass", "cancelled", "", "skipped", "false", "cancelled", False),
         ):
-            with self.subTest(verdict=verdict, delivery=delivery, review_outcome=review_outcome):
+            with self.subTest(verdict=verdict, delivery=delivery, review_outcome=review_outcome,
+                              publish_outcome=publish_outcome, cancelled=cancelled):
                 env = dict(self.env, OUTPUT_DIR=str(out), REVIEW_COMPLETED="true",
+                           RESULT_FILE=str(out / "result.json"), SUMMARY_FILE=str(out / "summary.md"),
                            REVIEW_OUTCOME=review_outcome, VERDICT=verdict,
                            DELIVERY=delivery, PUBLISH_OUTCOME=publish_outcome,
-                           JOB_CANCELLED="true" if publish_outcome == "cancelled" else "false")
+                           JOB_CANCELLED=cancelled)
                 result = subprocess.run(["bash", str(ROOT / "scripts/finalize.sh")],
                                         env=env, capture_output=True, text=True, timeout=8)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 payload = json.loads((self.root / "final-patch.json").read_text())
                 self.assertEqual(payload["conclusion"], expected)
-                if delivery != "success" and expected != "cancelled":
+                if expected == "cancelled":
+                    self.assertEqual(payload["output"]["title"], "Review cancelled")
+                    self.assertIn("review was cancelled", payload["output"]["summary"])
+                elif warning:
+                    self.assertIn("delivery could not be verified", payload["output"]["title"])
+                else:
+                    self.assertEqual(payload["output"]["title"], "Fixture verdict")
+                    self.assertEqual(payload["output"]["summary"], "Fixture summary")
+                if warning:
                     self.assertIn("delivery could not be verified", payload["output"]["summary"])
+                    self.assertIn("Do not retry automatically", payload["output"]["summary"])
+                else:
+                    self.assertNotIn("delivery could not be verified", payload["output"]["summary"])
 
     def test_review_publish_finalize_actual_scripts_preserve_delivery_and_blocking(self):
         (self.bin / "gh").write_text("#!" + sys.executable + "\n" + '''import os, pathlib, sys

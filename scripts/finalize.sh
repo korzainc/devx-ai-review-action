@@ -6,11 +6,16 @@ set -euo pipefail
 result="${RESULT_FILE:-}"
 summary_file="${SUMMARY_FILE:-}"
 
+delivery_failed=false
+if [ "${REVIEW_COMPLETED:-false}" = "true" ] \
+  && { [ "${PUBLISH_OUTCOME:-}" != "success" ] || [ "${DELIVERY:-}" != "success" ]; }; then
+  delivery_failed=true
+fi
+
 case "${JOB_CANCELLED:-false}:$REVIEW_OUTCOME" in
   true:* | *:cancelled) conclusion=cancelled ;;
   *)
-    if [ "${REVIEW_COMPLETED:-false}" = "true" ] \
-      && { [ "${PUBLISH_OUTCOME:-}" != "success" ] || [ "${DELIVERY:-}" != "success" ]; }; then
+    if [ "$delivery_failed" = "true" ]; then
       conclusion=failure
     elif [ "$REVIEW_OUTCOME:$VERDICT" = "success:pass" ] \
       && [ "${REVIEW_COMPLETED:-false}" = "true" ]; then
@@ -36,7 +41,7 @@ fi
 
 if [ "$conclusion" = "cancelled" ]; then
   title="Review cancelled"
-elif [ "$completed" = "true" ] && [ "${DELIVERY:-}" != "success" ]; then
+elif [ "$completed" = "true" ] && [ "$delivery_failed" = "true" ]; then
   title="Review delivery could not be verified"
 elif [ "$completed" = "true" ]; then
   if [ -n "$result" ] && [ -f "$result" ] && [ ! -L "$result" ] && [ -s "$result" ]; then
@@ -62,7 +67,14 @@ else
   summary="The review did not produce a result. See the workflow run logs."
 fi
 summary="${summary:0:60000}"
-if [ "$completed" = "true" ] && [ "${DELIVERY:-}" != "success" ]; then
+# Cancellation can interrupt publication after comments land. A skipped publisher
+# with no delivery output has not started; otherwise keep the partial-delivery warning.
+case "${PUBLISH_OUTCOME:-}:${DELIVERY:-}" in
+  : | skipped:) publish_started=false ;;
+  *) publish_started=true ;;
+esac
+if [ "$completed" = "true" ] && [ "$delivery_failed" = "true" ] \
+  && { [ "$conclusion" != "cancelled" ] || [ "$publish_started" = "true" ]; }; then
   summary="$(printf 'Review delivery could not be verified; comments may have been posted. Do not retry automatically.\n\n%s' "$summary")"
 fi
 
