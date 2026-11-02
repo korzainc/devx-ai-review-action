@@ -301,6 +301,14 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
                     self.assert_rejected()
                     target[key] = previous
 
+    def test_rejected_handoff_reports_that_delivery_never_started(self):
+        self.add_finding()
+        self.action["skills_run"] = ["unknown"]
+        self.write_handoff()
+        self.assert_rejected()
+        outputs = (self.root / "outputs").read_text().splitlines()
+        self.assertEqual([o for o in outputs if o.startswith("delivery=")][-1], "delivery=not-started")
+
     def test_stale_and_unplaceable_summaries_are_successful_delivery(self):
         self.add_finding()
         for updates in ({"head_moved": True, "summary_only": True}, {"couldnt_place": 1},

@@ -366,6 +366,27 @@ pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdi
                 else:
                     self.assertNotIn("delivery could not be verified", payload["output"]["summary"])
 
+    def test_finalizer_says_retry_is_safe_when_delivery_never_started(self):
+        (self.bin / "gh").write_text("#!" + sys.executable + "\n" + '''import os, pathlib, sys
+pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdin.read())
+''')
+        (self.bin / "gh").chmod(0o755)
+        out = self.root / "final-review"
+        out.mkdir()
+        (out / "result.json").write_text(json.dumps({"verdict": {"reason": "Fixture verdict"}}))
+        (out / "summary.md").write_text("Fixture summary")
+        env = dict(self.env, OUTPUT_DIR=str(out), REVIEW_COMPLETED="true",
+                   RESULT_FILE=str(out / "result.json"), SUMMARY_FILE=str(out / "summary.md"),
+                   REVIEW_OUTCOME="success", VERDICT="pass", DELIVERY="not-started",
+                   PUBLISH_OUTCOME="failure", JOB_CANCELLED="false")
+        result = subprocess.run(["bash", str(ROOT / "scripts/finalize.sh")],
+                                env=env, capture_output=True, text=True, timeout=8)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        payload = json.loads((self.root / "final-patch.json").read_text())
+        self.assertEqual(payload["conclusion"], "failure")
+        self.assertIn("nothing was posted", payload["output"]["summary"])
+        self.assertNotIn("Do not retry", payload["output"]["summary"])
+
     def test_review_publish_finalize_actual_scripts_preserve_delivery_and_blocking(self):
         (self.bin / "gh").write_text("#!" + sys.executable + "\n" + '''import os, pathlib, sys
 pathlib.Path(os.environ["FIXTURE_ROOT"], "final-patch.json").write_text(sys.stdin.read())

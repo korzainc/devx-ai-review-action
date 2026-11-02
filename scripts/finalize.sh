@@ -70,10 +70,14 @@ summary="${summary:0:60000}"
 # Cancellation can interrupt publication after comments land. A skipped publisher
 # with no delivery output has not started; otherwise keep the partial-delivery warning.
 case "${PUBLISH_OUTCOME:-}:${DELIVERY:-}" in
-  : | skipped:) publish_started=false ;;
+  : | skipped: | *:not-started) publish_started=false ;;
   *) publish_started=true ;;
 esac
-if [ "$completed" = "true" ] && [ "$delivery_failed" = "true" ] \
+# publish.sh reports not-started only when it stopped before the publisher could run.
+if [ "$completed" = "true" ] && [ "$delivery_failed" = "true" ] && [ "${DELIVERY:-}" = "not-started" ] \
+  && [ "$conclusion" != "cancelled" ]; then
+  summary="$(printf 'Review delivery did not start, so nothing was posted. Running /review again is safe.\n\n%s' "$summary")"
+elif [ "$completed" = "true" ] && [ "$delivery_failed" = "true" ] \
   && { [ "$conclusion" != "cancelled" ] || [ "$publish_started" = "true" ]; }; then
   summary="$(printf 'Review delivery could not be verified; comments may have been posted. Do not retry automatically.\n\n%s' "$summary")"
 fi

@@ -5,7 +5,7 @@ set -euo pipefail
 
 out() { printf '%s=%s\n' "$1" "$2" >> "$GITHUB_OUTPUT"; }
 : "${GITHUB_OUTPUT:?}"
-out delivery error
+out delivery not-started # becomes error once the publisher container can run
 for name in OUTPUT_DIR REVIEW_COMPLETION_FILE REVIEW_IMAGE GITHUB_REPOSITORY PR_NUMBER \
   HEAD_SHA BASE_SHA GITHUB_RUN_ID GITHUB_RUN_ATTEMPT RUNNER_TEMP GITHUB_TOKEN; do
   if [ -z "${!name:-}" ]; then
@@ -60,6 +60,7 @@ findings="$(env -i PATH="$PATH" python3 "$script_dir/contract.py" stage-handoff 
 
 set +e
 publisher_started=true
+out delivery error
 env -i PATH="$PATH" GITHUB_TOKEN="$GITHUB_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
   PR_NUMBER="$PR_NUMBER" timeout --signal=TERM --kill-after=5 "$publish_timeout" \
   docker run --rm --init --name "$publisher_container" --pull=never --user "$(id -u):$(id -g)" \

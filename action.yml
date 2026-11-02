@@ -96,7 +96,7 @@ outputs:
     description: ID of the check run created on the PR head commit.
     value: ${{ steps.prep.outputs.check-run-id }}
   delivery:
-    description: success after a verified summary-comment receipt, error on failed delivery, or skipped when publishing did not run.
+    description: success after a verified summary-comment receipt, error on failed or unverified delivery, not-started when publishing failed before the publisher ran, or skipped when publishing did not run.
     value: ${{ steps.publish.outputs.delivery || 'skipped' }}
   summary-url:
     description: Verified summary comment URL when delivery succeeded.
