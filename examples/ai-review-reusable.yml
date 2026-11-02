@@ -1,0 +1,21 @@
+# Merge to the default branch so GitHub can receive /review comments.
+# pre-release is for trials; pin a reviewed full commit SHA for a stable rollout.
+name: AI Code Review
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  packages: read
+
+jobs:
+  review:
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@pre-release
+    secrets:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

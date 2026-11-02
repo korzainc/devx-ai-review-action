@@ -16,10 +16,14 @@ case "$GITHUB_EVENT_NAME" in
     [ -n "$(event '.issue.pull_request // empty')" ] || skip "Comment is not on a pull request. Skipping."
 
     first_line="$(event '.comment.body' | head -n1 | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    # GitHub's caller expression ignores string case. Match the same variants
+    # here so an admitted command cannot cancel a review and then be skipped.
+    shopt -s nocasematch
     case "$first_line" in
       "$TRIGGER_PHRASE" | "$TRIGGER_PHRASE "*) ;;
       *) skip "Comment does not start with $TRIGGER_PHRASE. Skipping." ;;
     esac
+    shopt -u nocasematch
 
     assoc="$(event '.comment.author_association')"
     if [[ ",$ALLOWED_ASSOCIATIONS," != *",$assoc,"* ]]; then
@@ -51,16 +55,6 @@ pr_json="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr")"
 base_ref="$(jq -r '.base.ref' <<< "$pr_json")"
 api_head_sha="$(jq -r '.head.sha' <<< "$pr_json")"
 
-# Open the check first, so the PR shows "In progress" right away.
-run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-check_id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" \
-  -f name="$CHECK_NAME" -f head_sha="$api_head_sha" -f status=in_progress \
-  -f details_url="$run_url" \
-  -f 'output[title]=Starting review' \
-  -f "output[summary]=Review requested on PR #$pr." \
-  --jq '.id')"
-out check-run-id "$check_id"
-
 git rev-parse --is-inside-work-tree > /dev/null 2>&1 \
   || {
     echo "::error::No git checkout found. Add actions/checkout before this action."
@@ -81,6 +75,17 @@ base_sha="$(git merge-base refs/korza/base refs/korza/head)"
 if [ "$head_sha" != "$api_head_sha" ]; then
   echo "::warning::PR head moved during setup (${api_head_sha:0:7} to ${head_sha:0:7}). Reviewing ${head_sha:0:7}."
 fi
+
+# The check must name the exact fetched commit reviewed by the engine.
+# A fetch failure creates no check against a different API-observed head.
+run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+check_id="$(gh api -X POST "repos/$GITHUB_REPOSITORY/check-runs" \
+  -f name="$CHECK_NAME" -f head_sha="$head_sha" -f status=in_progress \
+  -f details_url="$run_url" \
+  -f 'output[title]=Starting review' \
+  -f "output[summary]=Review requested on PR #$pr." \
+  --jq '.id')"
+out check-run-id "$check_id"
 
 out run true
 out pr-number "$pr"
