@@ -33,9 +33,11 @@ on:
         type: number
         default: 360
       upload-debug:
-        description: Keep source and model debug artifacts for 14 days; off by default.
-        type: boolean
-        default: false
+        description: >-
+          Keep source and model debug artifacts for 14 days. "auto" uploads only from
+          private repositories; "true" or "false" forces it on or off.
+        type: string
+        default: auto  # auto = upload only from private repositories; "true"/"false" force it
       fail-on-error:
         description: Whether an incomplete review fails the check instead of reporting neutral.
         type: string

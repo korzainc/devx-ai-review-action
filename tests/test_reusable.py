@@ -218,20 +218,21 @@ else: raise SystemExit(1)
                         draft=draft, head=SimpleNamespace(repo=SimpleNamespace(full_name=repo)))))
                 self.assertEqual(bool(github_expression(expression, {"github": github}, allowed_functions={})), expected)
 
-    def test_debug_artifact_opt_out_reaches_upload_gate_without_false_fallback(self):
+    def test_debug_artifacts_default_to_private_repositories_only(self):
         source = self.workflow()
         declarations = source.split("    secrets:\n", 1)[0]
         self.assertIn("      upload-debug:\n", declarations)
         # Read the input's full indented body, stopping at the next input.
         declaration = re.split(r"^      [a-z-]+:", declarations.split("      upload-debug:\n", 1)[1], maxsplit=1, flags=re.M)[0]
-        self.assertIn("        type: boolean\n", declaration)
-        self.assertIn("        default: false\n", declaration)
+        self.assertIn("        type: string\n", declaration)
+        self.assertIn("        default: auto  #", declaration)
         review = source.split("  review:\n", 1)[1]
         forwarding = dict(re.findall(r"^          ([a-z-]+): (.+)$", review, re.M))
-        value = forwarding["upload-debug"].removeprefix("${{").removesuffix("}}").strip()
-        # A truthy fallback would turn an explicit false back into true.
-        value = value.replace("inputs.upload-debug", "inputs.upload_debug")
+        # Forwarded as is: a fallback would turn an explicit false back into true.
+        self.assertEqual(forwarding["upload-debug"], "${{ inputs.upload-debug }}")
         action = (ROOT / "action.yml").read_text()
+        default = action.split("  upload-debug:\n", 1)[1].split("\n  image:", 1)[0]
+        self.assertIn('    default: "auto"', default)
         upload = action.split("    - name: Upload debug files\n", 1)[1]
         gate = next(line.split("if:", 1)[1].strip() for line in upload.splitlines() if "if:" in line)
         gate = gate.replace("inputs.upload-debug", "inputs.upload_debug").replace("steps.review.outputs.output-dir", "steps.review.outputs.output_dir")
@@ -239,12 +240,13 @@ else: raise SystemExit(1)
         # The existing bounded evaluator accepts equality, so express the same nonempty check.
         gate = gate.replace("steps.review.outputs.output_dir != ''", "!(steps.review.outputs.output_dir == '')")
         gate = gate.replace("steps.debug.outputs.debug_dir != ''", "!(steps.debug.outputs.debug_dir == '')")
-        for supplied in (None, False, True):
-            effective = False if supplied is None else supplied
-            forwarded = github_expression(value, {"inputs": SimpleNamespace(upload_debug=effective)}, allowed_functions={})
-            self.assertIs(forwarded, effective)
+        for setting, private, expected in (("auto", True, True), ("auto", False, False),
+                ("true", False, True), ("true", True, True),
+                ("false", True, False), ("false", False, False)):
             for has_output in (False, True):
                 for has_stage in (False, True):
-                    with self.subTest(supplied=supplied, output=has_output, stage=has_stage):
-                        accepted = github_expression(gate, {"inputs": SimpleNamespace(upload_debug=str(forwarded).lower()), "steps": SimpleNamespace(review=SimpleNamespace(outputs=SimpleNamespace(output_dir="owned-output" if has_output else "")), debug=SimpleNamespace(outputs=SimpleNamespace(debug_dir="private-debug" if has_stage else "")))}, allowed_functions={"always": lambda: True})
-                        self.assertEqual(bool(accepted), effective and has_output and has_stage)
+                    with self.subTest(setting=setting, private=private, output=has_output, stage=has_stage):
+                        github = SimpleNamespace(event=SimpleNamespace(repository=SimpleNamespace(private=private)))
+                        steps = SimpleNamespace(review=SimpleNamespace(outputs=SimpleNamespace(output_dir="owned-output" if has_output else "")), debug=SimpleNamespace(outputs=SimpleNamespace(debug_dir="private-debug" if has_stage else "")))
+                        accepted = github_expression(gate, {"inputs": SimpleNamespace(upload_debug=setting), "github": github, "steps": steps}, allowed_functions={"always": lambda: True})
+                        self.assertEqual(bool(accepted), expected and has_output and has_stage)

@@ -56,8 +56,9 @@ The shared workflow accepts optional `config`, `skills`, `timeout-seconds`,
 defaults match the action below. `job-timeout-minutes` bounds the whole job,
 including preparation and publication; it defaults to GitHub’s standard 360 minutes. Keep it above
 the engine budget plus image-pull and publishing time. Existing consumers can
-preserve their check name and shorter job deadline with these inputs. Set
-`upload-debug: true` (an unquoted YAML boolean) to keep debug artifacts; they are off by default.
+preserve their check name and shorter job deadline with these inputs. Debug
+artifacts upload only from private repositories by default (`upload-debug: auto`); set
+`upload-debug: "true"` or `"false"` to force them on or off.
 `concurrency-prefix` defaults to `ai-review`; retain an existing prefix when
 migrating so a new review can still cancel an older run on the same PR.
 
@@ -146,7 +147,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `timeout-seconds` | `600` | Engine time budget, 1 through 3600. 30s past it the action sends TERM, then KILL 20s later. |
 | `publish-timeout-seconds` | `360` | Hard outer publisher timeout in seconds (1 through 3600), including container startup, followed by bounded termination and cleanup. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
-| `upload-debug` | `false` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. Set `true` to upload them. See the data note below. |
+| `upload-debug` | `auto` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. `auto` uploads only when the repository is private; `true` or `false` forces it. See the data note below. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
 
 The publish timeout is forwarded unchanged to the engine. A compatible engine reserves
@@ -163,7 +164,8 @@ timeout above the configured waiting budget.
 
 Debug artifacts contain unredacted source and model text, which may include sensitive
 content. The action does not deliberately attach the checkout, environment files or
-credential files. Anyone with read access to the repository can download them.
+credential files. Anyone with read access to the repository can download them, which
+is why the default (`auto`) never uploads from a public repository.
 Publisher run files are not included in these artifacts. Normal console output
 remains in workflow logs.
 

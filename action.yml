@@ -74,9 +74,11 @@ inputs:
       Keep review-stage logs, model calls, findings and inputs as a workflow artifact
       for up to 14 days. Raw source and model text may contain sensitive content. No checkout,
       environment files or credential files are deliberately attached. Publisher run files
-      are not included; normal console output remains in workflow logs. Off by default.
+      are not included; normal console output remains in workflow logs. "auto" (the
+      default) uploads only when the repository running the review is private; "true" or
+      "false" forces it on or off.
     required: false
-    default: "false"
+    default: "auto"  # auto = upload only from private repositories; "true"/"false" force it
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false
@@ -209,14 +211,14 @@ runs:
     # Source and model text are not redacted.
     - name: Stage debug files
       id: debug
-      if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != ''
+      if: always() && (inputs.upload-debug == 'true' || (inputs.upload-debug == 'auto' && github.event.repository.private)) && steps.review.outputs.output-dir != ''
       shell: bash
       env:
         OUTPUT_DIR: ${{ steps.review.outputs.output-dir }}
       run: env -i PATH="$PATH" OUTPUT_DIR="$OUTPUT_DIR" RUNNER_TEMP="$RUNNER_TEMP" GITHUB_OUTPUT="$GITHUB_OUTPUT" python3 -I "$GITHUB_ACTION_PATH/scripts/stage_debug.py"
 
     - name: Upload debug files
-      if: always() && inputs.upload-debug == 'true' && steps.review.outputs.output-dir != '' && steps.debug.outputs.debug-dir != ''
+      if: always() && (inputs.upload-debug == 'true' || (inputs.upload-debug == 'auto' && github.event.repository.private)) && steps.review.outputs.output-dir != '' && steps.debug.outputs.debug-dir != ''
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ai-review-pr${{ steps.prep.outputs.pr-number }}-${{ github.run_id }}-${{ github.run_attempt }}
