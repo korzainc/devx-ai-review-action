@@ -1,4 +1,4 @@
-# Reusable on-demand review for GitHub.com hosted runners (2.336.0+).
+# Reusable on-demand review for GitHub.com hosted runners.
 name: AI Code Review
 
 on:

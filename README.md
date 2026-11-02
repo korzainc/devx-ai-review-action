@@ -46,8 +46,8 @@ jobs:
 
 `pre-release` is a moving trial branch. Pin the reusable workflow to a full
 reviewed commit SHA for a stable rollout; its composite action automatically
-uses that same revision. This requires GitHub.com runners 2.336.0 or newer and
-uses hosted `ubuntu-latest`.
+uses that same revision. It runs on hosted `ubuntu-latest` and needs support for
+repository-root `$/` references (supported by runner 2.338.2).
 
 The `ANTHROPIC_API_KEY` secret belongs to the consuming repository (or an org
 secret available to it). No key is needed to post the hint; a review needs it.
@@ -224,6 +224,7 @@ UID with model authority only:
 | `/github/out` (writable) | Where the engine writes its results |
 | `PR_NUMBER`, `BASE_SHA`, `HEAD_SHA` | The PR and the merge-base..head range to review |
 | `CHECK_RUN_ID` | Identity of the open check run, for logging and correlation only. The review container has no GitHub token and cannot modify it; `finalize.sh` completes it. |
+| `REVIEW_IMAGE_DIGEST` | SHA-256 content digest of the pinned engine image, passed for provenance; it does not select a different image |
 | `REVIEW_CONFIG`, `REVIEW_SKILLS`, `REVIEW_TIMEOUT` | From the action inputs |
 | `PUBLISH_TIMEOUT` (publish step) | From `publish-timeout-seconds`; the engine sizes its rate-limit waiting to finish inside it |
 | `REVIEW_PRIOR` → `/github/prior.json` (read-only) | What earlier reviews left on the PR, fetched by the action with the job token: `review_comments` (the bot's earlier findings), `conversation_comments` (its summary, with the last reviewed commit) and `changed_since`: the files whose content differs between that commit and the head (`snapshot_diff: true`), also after a force push or rebase (two compares from the merge base, matched by blob hash). `changed_since` is left out when the last commit is gone or GitHub can't list every file; the engine then reviews every file. |
