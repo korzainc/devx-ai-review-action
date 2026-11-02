@@ -2,7 +2,7 @@
 
 > **Pre-release.** The `pre-release` branch is for trying the action on a few
 > repos before v1. It pins the release-candidate engine image
-> (`ghcr.io/korzainc/devx-ai-review-pre-release`, engine `4d288de`), and the inputs, outputs and
+> (`ghcr.io/korzainc/devx-ai-review-pre-release`, engine `3e85c99`), and the inputs, outputs and
 > engine contract may still change.
 
 On-demand AI code review for pull requests. Comment `/review` on a PR and the
@@ -59,6 +59,10 @@ the engine budget plus image-pull and publishing time. Existing consumers can
 preserve their check name and shorter job deadline with these inputs. Debug
 artifacts upload only from private repositories by default (`upload-debug: auto`); set
 `upload-debug: "true"` or `"false"` to force them on or off.
+When updating an existing reusable-workflow pin, quote any existing `upload-debug` boolean value: use
+`upload-debug: "true"` or `"false"` instead of bare `true` or `false`. The input
+now accepts strings. Private repositories that previously omitted it will upload
+debug artifacts; set `"false"` to keep uploads disabled.
 `concurrency-prefix` defaults to `ai-review`; retain an existing prefix when
 migrating so a new review can still cancel an older run on the same PR.
 
