@@ -74,9 +74,9 @@ inputs:
       Keep review-stage logs, model calls, findings and inputs as a workflow artifact
       for up to 14 days. Raw source and model text may contain sensitive content. No checkout,
       environment files or credential files are deliberately attached. Publisher run files
-      are not included; normal console output remains in workflow logs.
+      are not included; normal console output remains in workflow logs. Off by default.
     required: false
-    default: "true"
+    default: "false"
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false

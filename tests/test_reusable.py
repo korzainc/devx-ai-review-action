@@ -225,7 +225,7 @@ else: raise SystemExit(1)
         # Read the input's full indented body, stopping at the next input.
         declaration = re.split(r"^      [a-z-]+:", declarations.split("      upload-debug:\n", 1)[1], maxsplit=1, flags=re.M)[0]
         self.assertIn("        type: boolean\n", declaration)
-        self.assertIn("        default: true\n", declaration)
+        self.assertIn("        default: false\n", declaration)
         review = source.split("  review:\n", 1)[1]
         forwarding = dict(re.findall(r"^          ([a-z-]+): (.+)$", review, re.M))
         value = forwarding["upload-debug"].removeprefix("${{").removesuffix("}}").strip()
@@ -240,7 +240,7 @@ else: raise SystemExit(1)
         gate = gate.replace("steps.review.outputs.output_dir != ''", "!(steps.review.outputs.output_dir == '')")
         gate = gate.replace("steps.debug.outputs.debug_dir != ''", "!(steps.debug.outputs.debug_dir == '')")
         for supplied in (None, False, True):
-            effective = True if supplied is None else supplied
+            effective = False if supplied is None else supplied
             forwarded = github_expression(value, {"inputs": SimpleNamespace(upload_debug=effective)}, allowed_functions={})
             self.assertIs(forwarded, effective)
             for has_output in (False, True):

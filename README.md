@@ -57,7 +57,7 @@ defaults match the action below. `job-timeout-minutes` bounds the whole job,
 including preparation and publication; it defaults to GitHub’s standard 360 minutes. Keep it above
 the engine budget plus image-pull and publishing time. Existing consumers can
 preserve their check name and shorter job deadline with these inputs. Set
-`upload-debug: false` (an unquoted YAML boolean) to disable debug artifact uploads.
+`upload-debug: true` (an unquoted YAML boolean) to keep debug artifacts; they are off by default.
 `concurrency-prefix` defaults to `ai-review`; retain an existing prefix when
 migrating so a new review can still cancel an older run on the same PR.
 
@@ -146,7 +146,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `timeout-seconds` | `600` | Engine time budget, 1 through 3600. 30s past it the action sends TERM, then KILL 20s later. |
 | `publish-timeout-seconds` | `360` | Hard outer publisher timeout in seconds (1 through 3600), including container startup, followed by bounded termination and cleanup. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
-| `upload-debug` | `true` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. Set `false` to skip uploads. See the data note below. |
+| `upload-debug` | `false` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. Set `true` to upload them. See the data note below. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |
 
 The publish timeout is forwarded unchanged to the engine. A compatible engine reserves
