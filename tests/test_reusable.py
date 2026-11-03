@@ -193,6 +193,11 @@ else: raise SystemExit(1)
         self.assertIn("provider: ${{ inputs.provider }}", review)
         declarations = source.split("    secrets:\n", 1)[1].split("\npermissions:", 1)[0]
         self.assertIn("      OPENAI_API_KEY:\n", declarations)
+        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+            block = re.split(r"\n      (?=\S)", declarations.split(f"      {key}:\n", 1)[1], maxsplit=1)[0]
+            self.assertIn("required: false", block)
+        inputs = source.split("    inputs:\n", 1)[1].split("    secrets:\n", 1)[0]
+        self.assertIn("      provider:\n", inputs)
         self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", review)
         self.assertNotIn("secrets: inherit", source)
 

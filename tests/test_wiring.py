@@ -267,6 +267,21 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         self.assertIn("PUBLISH_OUTCOME: ${{ steps.publish.outcome }}", final)
         self.assertIn("DELIVERY: ${{ steps.publish.outputs.delivery }}", final)
 
+    def test_action_passes_model_keys_and_provider_only_to_review(self):
+        action = (ROOT / "action.yml").read_text()
+        inputs = "\n" + action.split("\ninputs:\n", 1)[1].split("\nruns:", 1)[0]
+        for name in ("anthropic-api-key", "openai-api-key", "provider"):
+            with self.subTest(input=name):
+                block = re.split(r"\n  (?=\S)", inputs.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+                self.assertIn("    required: false", block)
+        review = action.split("    - name: Review\n", 1)[1].split("    - name:", 1)[0]
+        self.assertIn("ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}", review)
+        self.assertIn("OPENAI_API_KEY: ${{ inputs.openai-api-key }}", review)
+        self.assertIn("REVIEW_PROVIDER: ${{ inputs.provider }}", review)
+        publish = action.split("    - name: Publish review\n", 1)[1].split("    - name:", 1)[0]
+        for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "REVIEW_PROVIDER"):
+            self.assertNotIn(name, publish)
+
     def test_example_filters_authorized_exact_command_before_concurrency(self):
         example = (ROOT / "examples/ai-review.yml").read_text()
         review = example.split("  review:\n", 1)[1]
