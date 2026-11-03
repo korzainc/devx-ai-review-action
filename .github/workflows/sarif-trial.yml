@@ -25,6 +25,9 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           check-name: AI Code Review (SARIF trial)
           upload-sarif: "true"
+          # This repo can pull only the pre-release package; main's default
+          # (devx-ai-review:0.1.0) is a new package it has no read access to yet.
+          image: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.0-rc4-3e85c99@sha256:761391be95a00508ef7fc1e255dd268f2e8372b80c9934770e784b8cf8f6f478
       - name: Report outputs
         if: always()
         env:
