@@ -103,7 +103,7 @@ inputs:
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false
-    default: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.0-rc4-3e85c99@sha256:761391be95a00508ef7fc1e255dd268f2e8372b80c9934770e784b8cf8f6f478
+    default: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.0-rc5-8cba155@sha256:d780c11690438ec93e8bffe2d13b3c9e68c8bf5cc5b4cf79ae010f5f55509e2b
 
 outputs:
   verdict:
