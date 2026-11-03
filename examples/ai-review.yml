@@ -79,5 +79,6 @@ jobs:
           # Repos outside korzainc also need:
           # registry-token: ${{ secrets.KORZA_REGISTRY_TOKEN }}
           # registry-username: korza-registry-bot
-          # Also send findings to code scanning. Uncomment security-events: write above.
+          # Code scanning upload: off for the pilot (see Security in the README).
+          # Needs security-events: write above.
           # upload-sarif: true
