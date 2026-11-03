@@ -111,6 +111,7 @@ class LifecycleTests(unittest.TestCase):
             "RUNNER_TEMP": str(self.base / "runner"),
             "GITHUB_WORKSPACE": str(self.base / "workspace"),
             "GITHUB_EVENT_PATH": str(self.base / "event.json"),
+            "ANTHROPIC_API_KEY": "fixture-model",
             "GITHUB_REPOSITORY": "fixture/repo", "GITHUB_SERVER_URL": "https://github.invalid",
             "GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1", "CHECK_RUN_ID": "7", "REVIEW_IMAGE": IMAGE,
             "PR_NUMBER": "7", "HEAD_SHA": HEAD, "BASE_SHA": BASE,

@@ -43,6 +43,7 @@ jobs:
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY: ${{ secrets.KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY }}
 ```
 
 `pre-release` is a moving trial branch. Pin the reusable workflow to a full
@@ -50,13 +51,15 @@ reviewed commit SHA for a stable rollout; its composite action automatically
 uses that same revision. It runs on hosted `ubuntu-latest` and needs support for
 repository-root `$/` references (supported by runner 2.338.2).
 
-A review needs one model key; posting the hint needs none. The key picks the model:
+A review needs one model key; posting the hint needs none. The key picks the model, in this order:
 
-- `OPENAI_API_KEY` alone: GPT-6 Luna. It can be the org-level secret or the repository's own;
-  GitHub uses a repository secret over an org secret of the same name.
-- `ANTHROPIC_API_KEY` (alone or with the OpenAI key): Haiku 5.5. Only a repository adds it, so
-  it counts as the team's choice.
-- The `provider` input (`anthropic` or `openai`) forces one when both keys are present.
+1. The repository's own `OPENAI_API_KEY`: GPT-6 Luna.
+2. The repository's own `ANTHROPIC_API_KEY`: Haiku 5.5.
+3. The org-level `KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY`: GPT-6 Luna.
+
+The org key has its own name because a workflow can't tell a repository secret from an org
+secret of the same name; don't create org secrets named `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+The `provider` input (`anthropic` or `openai`) forces one. Only the chosen key reaches the engine.
 
 The shared workflow accepts optional `config`, `skills`, `timeout-seconds`, `provider`,
 `fail-on-error`, `check-name` and `upload-debug` inputs under `with:`. Their
@@ -145,9 +148,10 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 
 | Input | Default | Description |
 | --- | --- | --- |
-| `anthropic-api-key` | empty | Anthropic key, from a secret. When set, the review runs on Anthropic (Haiku 5.5). |
-| `openai-api-key` | empty | OpenAI key, from a secret (org-level or the repository's own). Used when no Anthropic key is set (GPT-6 Luna). One of the two keys is needed. |
-| `provider` | empty | `anthropic` or `openai` to force a provider; empty picks by key. |
+| `openai-api-key` | empty | The repository's own OpenAI key, from a secret. Used first (GPT-6 Luna). |
+| `anthropic-api-key` | empty | The repository's own Anthropic key, from a secret. Used when no `openai-api-key` is set (Haiku 5.5). |
+| `org-openai-api-key` | empty | The org-level OpenAI key (`KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY`). Used only when neither key above is set. One of the three is needed. |
+| `provider` | empty | `anthropic` or `openai` to force a provider; empty picks by key in the order above. |
 | `github-token` | `github.token` | Reads the PR, posts the check run and review comments. |
 | `registry-token` | `github.token` | Pulls the engine image from GHCR. |
 | `registry-username` | `github.actor` | GHCR login user. Set to the token owner when using a PAT. |

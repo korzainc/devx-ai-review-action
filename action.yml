@@ -8,20 +8,26 @@ branding:
 inputs:
   anthropic-api-key:
     description: >
-      Anthropic API key, from a secret. When set, the review runs on Anthropic (Haiku 5.5)
-      unless provider says otherwise.
+      Anthropic API key, from a secret. Used (Haiku 5.5) when no openai-api-key is set, or when
+      provider is anthropic.
     required: false
     default: ""
   openai-api-key:
     description: >
-      OpenAI API key, from a secret (the org-level key or the repository's own). Used when no
-      Anthropic key is passed (GPT-6 Luna), or when provider is openai.
+      The repository's own OpenAI API key, from a secret. Used first when set (GPT-6 Luna).
+    required: false
+    default: ""
+  org-openai-api-key:
+    description: >
+      The org-level OpenAI key (secret KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY). Used only
+      when neither openai-api-key nor anthropic-api-key is set. It has its own name because a
+      workflow can't tell a repository secret from an org secret of the same name.
     required: false
     default: ""
   provider:
     description: >
-      Force the model provider, anthropic or openai. Empty (the default) picks by key: Anthropic
-      when anthropic-api-key is set, else OpenAI.
+      Force the model provider, anthropic or openai. Empty (the default) picks by key: the
+      repository's OpenAI key, then its Anthropic key, then the org-level OpenAI key.
     required: false
     default: ""
   github-token:
@@ -148,6 +154,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY: ${{ inputs.org-openai-api-key }}
         REVIEW_PROVIDER: ${{ inputs.provider }}
         REVIEW_IMAGE: ${{ inputs.image }}
         REVIEW_CONFIG: ${{ inputs.config }}

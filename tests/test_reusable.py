@@ -193,7 +193,8 @@ else: raise SystemExit(1)
         self.assertIn("provider: ${{ inputs.provider }}", review)
         declarations = source.split("    secrets:\n", 1)[1].split("\npermissions:", 1)[0]
         self.assertIn("      OPENAI_API_KEY:\n", declarations)
-        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        self.assertIn("org-openai-api-key: ${{ secrets.KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY }}", review)
+        for key in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY"):
             block = re.split(r"\n      (?=\S)", declarations.split(f"      {key}:\n", 1)[1], maxsplit=1)[0]
             self.assertIn("required: false", block)
         inputs = source.split("    inputs:\n", 1)[1].split("    secrets:\n", 1)[0]

@@ -39,7 +39,7 @@ on:
         type: string
         default: auto  # auto = upload only from private repositories; "true"/"false" force it
       provider:
-        description: Force the model provider, anthropic or openai; empty picks by key (Anthropic when its key is passed, else OpenAI).
+        description: Force the model provider, anthropic or openai; empty picks by key (the repository's OpenAI key, then its Anthropic key, then the org-level OpenAI key).
         type: string
         default: ""
       fail-on-error:
@@ -48,10 +48,13 @@ on:
         default: "false"
     secrets:
       ANTHROPIC_API_KEY:
-        description: Anthropic key used only by the review engine; when passed, the review runs on Anthropic.
+        description: Anthropic key used only by the review engine; used when no repository OpenAI key is passed.
         required: false
       OPENAI_API_KEY:
-        description: OpenAI key used only by the review engine (the org-level key or the repository's own).
+        description: The repository's own OpenAI key, used only by the review engine; used first when passed.
+        required: false
+      KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY:
+        description: The org-level OpenAI key, used only when the repository passes neither key of its own.
         required: false
       REGISTRY_TOKEN:
         description: Optional pull-only GHCR credential when the job token cannot access the engine image.
@@ -137,6 +140,7 @@ jobs:
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          org-openai-api-key: ${{ secrets.KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY }}
           provider: ${{ inputs.provider }}
           registry-token: ${{ secrets.REGISTRY_TOKEN || github.token }}
           registry-username: ${{ inputs.registry-username || github.actor }}

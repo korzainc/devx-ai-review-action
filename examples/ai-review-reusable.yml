@@ -18,7 +18,8 @@ jobs:
   review:
     uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@pre-release
     secrets:
-      # The org-level OpenAI key, or the repository's own. Pass ANTHROPIC_API_KEY instead (or as
-      # well) to review on Anthropic.
+      # Picked in this order: the repository's own OpenAI key, its own Anthropic key, then the
+      # org-level OpenAI key (its own name, since a repo and an org secret can't be told apart).
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY: ${{ secrets.KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY }}

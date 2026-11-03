@@ -74,9 +74,10 @@ jobs:
       # flags it as mutable). Pin a commit SHA from it if your org requires immutable refs.
       - uses: korzainc/devx-ai-review-action@pre-release
         with:
-          # Either key works: Anthropic is used when its key is set, else OpenAI.
+          # Picked in this order: the repo's OpenAI key, its Anthropic key, then the org-level key.
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          org-openai-api-key: ${{ secrets.KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY }}
           # Repos outside korzainc also need:
           # registry-token: ${{ secrets.KORZA_REGISTRY_TOKEN }}
           # registry-username: korza-registry-bot
