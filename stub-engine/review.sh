@@ -11,6 +11,8 @@
 #   crash     exit nonzero without writing result.json
 #   sleep     hang well past REVIEW_TIMEOUT, to test cancellation and the
 #             action's timeout backstop
+# sarif can be added to any scenario that writes findings (advisory, blocking,
+# clean): it also writes results.sarif from them, for the upload-sarif path.
 set -euo pipefail
 
 OUT_DIR="${REVIEW_OUTPUT_DIR:-/github/out}"
@@ -40,6 +42,32 @@ fi
 
 provenance() {
   jq -n '{engine_version: "stub-0.1.0", image_digest: "", model: "none"}'
+}
+
+# Write results.sarif from result.json when the sarif flag is set: the minimal
+# SARIF 2.1.0 that code scanning accepts, one rule per distinct rule_id.
+write_sarif() {
+  case ",${REVIEW_SKILLS:-}," in *,sarif,*) ;; *) return 0 ;; esac
+  jq '{
+    "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs: [{
+      tool: {driver: {
+        name: "korza-ai-review-stub", version: "0.1.0",
+        rules: ([.findings[].rule_id] | unique | map({id: ., shortDescription: {text: .}}))
+      }},
+      results: [.findings[] | {
+        ruleId: .rule_id,
+        level: ({high: "error", critical: "error", medium: "warning"}[.severity] // "note"),
+        message: {text: .message},
+        locations: [{physicalLocation: {
+          artifactLocation: {uri: .location.path},
+          region: {startLine: .location.start_line, endLine: .location.end_line}
+        }}]
+      }]
+    }]
+  }' "$OUT_DIR/result.json" > "$OUT_DIR/results.sarif"
+  echo "SARIF written: $(jq '.runs[0].results | length' "$OUT_DIR/results.sarif") results."
 }
 
 if [ "$mode" = "error" ]; then
@@ -77,6 +105,7 @@ if [ "$mode" = "clean" ]; then
       verdict: {status: "pass", reason: "No findings.", blocking_findings: []},
       findings: [], skills_run: ["stub"], provenance: $prov}' > "$OUT_DIR/result.json"
   echo "Result written: pass, 0 findings."
+  write_sarif
   exit 0
 fi
 
@@ -120,6 +149,7 @@ jq -n \
     ],
     skills_run: ["stub"], provenance: $prov}' > "$OUT_DIR/result.json"
 echo "Result written: $status, 2 findings."
+write_sarif
 
 # Post one review comment with a suggestion block. Best effort: the result
 # stands even if commenting fails (for example, a read-only token).
