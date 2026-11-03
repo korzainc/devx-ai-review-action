@@ -163,7 +163,7 @@ timeout --signal=TERM --kill-after=20 "$hard_timeout" \
   -v "$out_dir:/github/out" \
   -w /workspace \
   -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/workspace \
-  -e ANTHROPIC_API_KEY \
+  -e ANTHROPIC_API_KEY -e OPENAI_API_KEY -e REVIEW_PROVIDER \
   -e GITHUB_REPOSITORY -e GITHUB_EVENT_NAME -e GITHUB_SERVER_URL -e GITHUB_API_URL \
   -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT \
   -e GITHUB_EVENT_PATH=/github/event.json \

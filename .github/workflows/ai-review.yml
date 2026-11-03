@@ -38,13 +38,20 @@ on:
           private repositories; "true" or "false" forces it on or off.
         type: string
         default: auto  # auto = upload only from private repositories; "true"/"false" force it
+      provider:
+        description: Force the model provider, anthropic or openai; empty picks by key (Anthropic when its key is passed, else OpenAI).
+        type: string
+        default: ""
       fail-on-error:
         description: Whether an incomplete review fails the check instead of reporting neutral.
         type: string
         default: "false"
     secrets:
       ANTHROPIC_API_KEY:
-        description: Anthropic key used only by the review engine.
+        description: Anthropic key used only by the review engine; when passed, the review runs on Anthropic.
+        required: false
+      OPENAI_API_KEY:
+        description: OpenAI key used only by the review engine (the org-level key or the repository's own).
         required: false
       REGISTRY_TOKEN:
         description: Optional pull-only GHCR credential when the job token cannot access the engine image.
@@ -129,6 +136,8 @@ jobs:
       - uses: $/
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          provider: ${{ inputs.provider }}
           registry-token: ${{ secrets.REGISTRY_TOKEN || github.token }}
           registry-username: ${{ inputs.registry-username || github.actor }}
           config: ${{ inputs.config }}

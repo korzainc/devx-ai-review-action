@@ -7,8 +7,23 @@ branding:
 
 inputs:
   anthropic-api-key:
-    description: Anthropic API key for the review. Always pass it from a secret.
-    required: true
+    description: >
+      Anthropic API key, from a secret. When set, the review runs on Anthropic (Haiku 5.5)
+      unless provider says otherwise.
+    required: false
+    default: ""
+  openai-api-key:
+    description: >
+      OpenAI API key, from a secret (the org-level key or the repository's own). Used when no
+      Anthropic key is passed (GPT-6 Luna), or when provider is openai.
+    required: false
+    default: ""
+  provider:
+    description: >
+      Force the model provider, anthropic or openai. Empty (the default) picks by key: Anthropic
+      when anthropic-api-key is set, else OpenAI.
+    required: false
+    default: ""
   github-token:
     description: Token used to read the PR and post the check run and review comments.
     required: false
@@ -132,6 +147,8 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        REVIEW_PROVIDER: ${{ inputs.provider }}
         REVIEW_IMAGE: ${{ inputs.image }}
         REVIEW_CONFIG: ${{ inputs.config }}
         REVIEW_SKILLS: ${{ inputs.skills }}

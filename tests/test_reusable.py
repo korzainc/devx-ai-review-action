@@ -189,6 +189,10 @@ else: raise SystemExit(1)
         self.assertNotIn("@pre-release", source)
         self.assertNotIn("      - uses: ./", review)
         self.assertIn("anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}", review)
+        self.assertIn("openai-api-key: ${{ secrets.OPENAI_API_KEY }}", review)
+        self.assertIn("provider: ${{ inputs.provider }}", review)
+        declarations = source.split("    secrets:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertIn("      OPENAI_API_KEY:\n", declarations)
         self.assertIn("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", review)
         self.assertNotIn("secrets: inherit", source)
 

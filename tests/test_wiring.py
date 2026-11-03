@@ -89,6 +89,7 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         timeout.write_text("#!/bin/sh\n[ \"${FIXTURE_TIMEOUT_EXIT:-0}\" = 0 ] || exit \"$FIXTURE_TIMEOUT_EXIT\"\nshift 3\nexec \"$@\"\n")
         timeout.chmod(0o755)
         self.env = dict(self.fixture.env, PATH=str(self.bin) + os.pathsep + os.environ["PATH"],
+                        OPENAI_API_KEY="fixture-openai", REVIEW_PROVIDER="openai",
                         RUNNER_TEMP=str(self.runner), GITHUB_EVENT_PATH=str(self.event),
                         GITHUB_WORKSPACE=str(self.workspace), GITHUB_STEP_SUMMARY=str(self.root / "summary"),
                         FIXTURE_ROOT=str(self.root), FAIL_ON_ERROR="false", CHECK_RUN_ID="13",
@@ -158,6 +159,10 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
                         if item.startswith("--env="))
         self.assertIn("ANTHROPIC_API_KEY", env_args)
         self.assertEqual(run_call["env"]["ANTHROPIC_API_KEY"], self.env["ANTHROPIC_API_KEY"])
+        # Both model keys and the provider choice reach the engine; it picks by key.
+        for name in ("OPENAI_API_KEY", "REVIEW_PROVIDER"):
+            self.assertIn(name, env_args)
+            self.assertEqual(run_call["env"].get(name), self.env.get(name))
         for token in host_tokens:
             with self.subTest(token=token):
                 self.assertNotIn(token, run_call["env"])
