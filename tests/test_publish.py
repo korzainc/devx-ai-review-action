@@ -206,7 +206,7 @@ sys.exit(code)
         self.assertIn("--pull=never", args)
         self.assertNotIn(str(self.out) + ":", " ".join(mounts))
         self.assertNotIn("fixture-write", " ".join(args))
-        for forbidden in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
+        for forbidden in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "OPENROUTER_API_KEY",
                           "REGISTRY_TOKEN", "GH_TOKEN", "HOME", "GITHUB_WORKSPACE"):
             self.assertNotIn(forbidden, env)
         self.assertEqual(json.loads((self.root / "received.json").read_text()), self.result)

@@ -69,6 +69,43 @@ if [ "$REVIEW_TIMEOUT" -gt 3600 ]; then
   incomplete "timeout-seconds must be 1 through 3600."
 fi
 
+# Which model key the engine gets. A workflow can't tell a repository secret from an org
+# secret of the same name, so the org-level OpenAI key has its own name and is used only when
+# the repository passes no key of its own. Order: the repository's OpenAI key, then its
+# Anthropic key, then the org's OpenAI key; the provider input forces one. Only the chosen key
+# reaches the engine, as OPENAI_API_KEY or ANTHROPIC_API_KEY.
+org_openai_key="${KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY:-}"
+unset KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY
+OPENAI_API_KEY="${OPENAI_API_KEY:-}"
+ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
+key_source=repository
+case "${REVIEW_PROVIDER:-}" in
+  "")
+    if [ -n "$OPENAI_API_KEY" ]; then
+      REVIEW_PROVIDER=openai
+    elif [ -n "$ANTHROPIC_API_KEY" ]; then
+      REVIEW_PROVIDER=anthropic
+    else
+      REVIEW_PROVIDER=openai
+    fi
+    ;;
+  openai | anthropic) ;;
+  *) incomplete "provider must be anthropic or openai, not '$REVIEW_PROVIDER'." ;;
+esac
+if [ "$REVIEW_PROVIDER" = openai ]; then
+  ANTHROPIC_API_KEY=""
+  if [ -z "$OPENAI_API_KEY" ] && [ -n "$org_openai_key" ]; then
+    OPENAI_API_KEY="$org_openai_key"
+    key_source=org
+  fi
+  [ -n "$OPENAI_API_KEY" ] || incomplete "No model key. Pass OPENAI_API_KEY or ANTHROPIC_API_KEY, or the org-level KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY."
+else
+  OPENAI_API_KEY=""
+  [ -n "$ANTHROPIC_API_KEY" ] || incomplete "provider is anthropic but no ANTHROPIC_API_KEY was passed."
+fi
+export OPENAI_API_KEY ANTHROPIC_API_KEY REVIEW_PROVIDER
+echo "Model provider: $REVIEW_PROVIDER ($key_source key)"
+
 # Pull before the clock starts, so a slow pull does not eat the engine's
 # budget. An image already on the runner (built earlier in the job) is used as is.
 # The pull gets its own limit, or a stalled registry would hold the check open.
@@ -163,7 +200,7 @@ timeout --signal=TERM --kill-after=20 "$hard_timeout" \
   -v "$out_dir:/github/out" \
   -w /workspace \
   -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/workspace \
-  -e ANTHROPIC_API_KEY \
+  -e ANTHROPIC_API_KEY -e OPENAI_API_KEY -e REVIEW_PROVIDER \
   -e GITHUB_REPOSITORY -e GITHUB_EVENT_NAME -e GITHUB_SERVER_URL -e GITHUB_API_URL \
   -e GITHUB_RUN_ID -e GITHUB_RUN_ATTEMPT \
   -e GITHUB_EVENT_PATH=/github/event.json \

@@ -125,6 +125,44 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
                 self.assertNotIn("review-completed", self.outputs())
                 self.assertFalse((self.root / "analysis-calls").exists())
 
+    def test_the_repository_key_wins_then_the_org_key(self):
+        # (repo OpenAI, repo Anthropic, org OpenAI, provider) -> (provider, OpenAI key, Anthropic key)
+        cases = [
+            ("repo-o", "repo-a", "org-o", "", ("openai", "repo-o", "")),
+            ("", "repo-a", "org-o", "", ("anthropic", "", "repo-a")),
+            ("", "", "org-o", "", ("openai", "org-o", "")),
+            ("repo-o", "repo-a", "org-o", "anthropic", ("anthropic", "", "repo-a")),
+            ("", "repo-a", "org-o", "openai", ("openai", "org-o", "")),
+        ]
+        for repo_o, repo_a, org_o, forced, expected in cases:
+            with self.subTest(repo_o=repo_o, repo_a=repo_a, org_o=org_o, forced=forced):
+                self.env.update(OPENAI_API_KEY=repo_o, ANTHROPIC_API_KEY=repo_a,
+                                KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY=org_o, REVIEW_PROVIDER=forced)
+                (self.root / "analysis-calls").unlink(missing_ok=True)
+                run = self.review()
+                self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+                calls = [json.loads(x) for x in (self.root / "analysis-calls").read_text().splitlines()]
+                env = next(c for c in calls if "run" in c["args"])["env"]
+                got = (env.get("REVIEW_PROVIDER"), env.get("OPENAI_API_KEY", ""), env.get("ANTHROPIC_API_KEY", ""))
+                self.assertEqual(got, expected)
+                self.assertNotIn("KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY", env)
+
+    def test_no_model_key_or_a_forced_provider_without_its_key_stops_before_the_engine(self):
+        for repo_o, repo_a, org_o, forced, message in [
+            ("", "", "", "", "No model key"),
+            ("repo-o", "", "org-o", "anthropic", "no ANTHROPIC_API_KEY"),
+            ("", "", "", "gemini", "provider must be anthropic or openai"),
+        ]:
+            with self.subTest(forced=forced, message=message):
+                self.env.update(OPENAI_API_KEY=repo_o, ANTHROPIC_API_KEY=repo_a,
+                                KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY=org_o, REVIEW_PROVIDER=forced)
+                (self.root / "analysis-calls").unlink(missing_ok=True)
+                run = self.review()
+                self.assertIn(message, run.stdout)
+                self.assertEqual(self.outputs()["verdict"], "error")
+                calls = (self.root / "analysis-calls").read_text() if (self.root / "analysis-calls").exists() else ""
+                self.assertNotIn("action-review", calls)
+
     def test_timeout_keeps_base_ten_leading_zero_normalization(self):
         for value, expected in [("1", "1"), ("3600", "3600"), ("09", "9"), ("0000000600", "600")]:
             with self.subTest(value=value):
@@ -158,6 +196,8 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
                         if item.startswith("--env="))
         self.assertIn("ANTHROPIC_API_KEY", env_args)
         self.assertEqual(run_call["env"]["ANTHROPIC_API_KEY"], self.env["ANTHROPIC_API_KEY"])
+        for name in ("OPENAI_API_KEY", "REVIEW_PROVIDER"):
+            self.assertIn(name, env_args)
         for token in host_tokens:
             with self.subTest(token=token):
                 self.assertNotIn(token, run_call["env"])
@@ -261,6 +301,23 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         final = action.split("    - name: Complete check\n", 1)[1].split("    - name:", 1)[0]
         self.assertIn("PUBLISH_OUTCOME: ${{ steps.publish.outcome }}", final)
         self.assertIn("DELIVERY: ${{ steps.publish.outputs.delivery }}", final)
+
+    def test_action_passes_model_keys_and_provider_only_to_review(self):
+        action = (ROOT / "action.yml").read_text()
+        inputs = "\n" + action.split("\ninputs:\n", 1)[1].split("\nruns:", 1)[0]
+        for name in ("anthropic-api-key", "openai-api-key", "org-openai-api-key", "provider"):
+            with self.subTest(input=name):
+                block = re.split(r"\n  (?=\S)", inputs.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+                self.assertIn("    required: false", block)
+        review = action.split("    - name: Review\n", 1)[1].split("    - name:", 1)[0]
+        self.assertIn("ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}", review)
+        self.assertIn("OPENAI_API_KEY: ${{ inputs.openai-api-key }}", review)
+        self.assertIn("REVIEW_PROVIDER: ${{ inputs.provider }}", review)
+        self.assertIn("KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY: ${{ inputs.org-openai-api-key }}", review)
+        publish = action.split("    - name: Publish review\n", 1)[1].split("    - name:", 1)[0]
+        for name in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "REVIEW_PROVIDER",
+                     "KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY"):
+            self.assertNotIn(name, publish)
 
     def test_example_filters_authorized_exact_command_before_concurrency(self):
         example = (ROOT / "examples/ai-review.yml").read_text()

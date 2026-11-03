@@ -7,8 +7,29 @@ branding:
 
 inputs:
   anthropic-api-key:
-    description: Anthropic API key for the review. Always pass it from a secret.
-    required: true
+    description: >
+      Anthropic API key, from a secret. Used (Haiku 5.5) when no openai-api-key is set, or when
+      provider is anthropic.
+    required: false
+    default: ""
+  openai-api-key:
+    description: >
+      The repository's own OpenAI API key, from a secret. Used first when set (GPT-6 Luna).
+    required: false
+    default: ""
+  org-openai-api-key:
+    description: >
+      The org-level OpenAI key (secret KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY). Used only
+      when neither openai-api-key nor anthropic-api-key is set. It has its own name because a
+      workflow can't tell a repository secret from an org secret of the same name.
+    required: false
+    default: ""
+  provider:
+    description: >
+      Force the model provider, anthropic or openai. Empty (the default) picks by key: the
+      repository's OpenAI key, then its Anthropic key, then the org-level OpenAI key.
+    required: false
+    default: ""
   github-token:
     description: Token used to read the PR and post the check run and review comments.
     required: false
@@ -82,7 +103,7 @@ inputs:
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false
-    default: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.0-rc4-3e85c99@sha256:761391be95a00508ef7fc1e255dd268f2e8372b80c9934770e784b8cf8f6f478
+    default: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.0-rc5-8cba155@sha256:d780c11690438ec93e8bffe2d13b3c9e68c8bf5cc5b4cf79ae010f5f55509e2b
 
 outputs:
   verdict:
@@ -132,6 +153,9 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
+        KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY: ${{ inputs.org-openai-api-key }}
+        REVIEW_PROVIDER: ${{ inputs.provider }}
         REVIEW_IMAGE: ${{ inputs.image }}
         REVIEW_CONFIG: ${{ inputs.config }}
         REVIEW_SKILLS: ${{ inputs.skills }}
