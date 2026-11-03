@@ -81,9 +81,12 @@ ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 key_source=repository
 case "${REVIEW_PROVIDER:-}" in
   "")
-    if [ -n "$OPENAI_API_KEY" ]; then REVIEW_PROVIDER=openai
-    elif [ -n "$ANTHROPIC_API_KEY" ]; then REVIEW_PROVIDER=anthropic
-    else REVIEW_PROVIDER=openai
+    if [ -n "$OPENAI_API_KEY" ]; then
+      REVIEW_PROVIDER=openai
+    elif [ -n "$ANTHROPIC_API_KEY" ]; then
+      REVIEW_PROVIDER=anthropic
+    else
+      REVIEW_PROVIDER=openai
     fi
     ;;
   openai | anthropic) ;;
