@@ -272,3 +272,7 @@ hung engine does not keep running on a self-hosted runner.
 No `v1` release exists yet. To try the action, use `@pre-release`. It is a
 moving branch, so pin a commit SHA from it if your org requires immutable refs.
 Each release pins the engine image by digest in `action.yml`.
+
+## License
+
+Apache-2.0. See [LICENSE](LICENSE).
