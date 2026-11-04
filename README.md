@@ -1,9 +1,9 @@
 # Korza AI Code Review
 
-> **Pre-release.** The `pre-release` branch is for trying the action on a few
-> repos before v1. It pins the release-candidate engine image
-> (`ghcr.io/korzainc/devx-ai-review-pre-release`, engine `3e85c99`), and the inputs, outputs and
-> engine contract may still change.
+> **Engine 0.1.0.** Pin the action to commit `041a434` (full SHA below), which pins the
+> released engine image `ghcr.io/korzainc/devx-ai-review:0.1.0`, a private package: a repo needs
+> read access on it ("Manage Actions access") to run the action. The `pre-release` branch stays
+> on the earlier release candidate until the repos that follow it move.
 
 On-demand AI code review for pull requests. Comment `/review` on a PR and the
 review runs inside your own CI. Findings appear as review comments on the exact
@@ -39,16 +39,16 @@ permissions:
 
 jobs:
   review:
-    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@pre-release
+    # The commit that pins engine 0.1.0.
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@041a434f6e4d4bf33b393b9606ee0f8fc93662a9
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY: ${{ secrets.KORZA_ORGWIDE_DEVX_AI_REVIEW_OPENAI_API_KEY }}
 ```
 
-`pre-release` is a moving trial branch. Pin the reusable workflow to a full
-reviewed commit SHA for a stable rollout; its composite action automatically
-uses that same revision. It runs on hosted `ubuntu-latest` and needs support for
+Pin the reusable workflow to a full commit SHA; its composite action automatically uses
+that same revision. It runs on hosted `ubuntu-latest` and needs support for
 repository-root `$/` references (supported by runner 2.338.2).
 
 A review needs one model key; posting the hint needs none. The key picks the model, in this order:
@@ -282,6 +282,6 @@ hung engine does not keep running on a self-hosted runner.
 
 ## Versioning
 
-No `v1` release exists yet. To try the action, use `@pre-release`. It is a
-moving branch, so pin a commit SHA from it if your org requires immutable refs.
-Each release pins the engine image by digest in `action.yml`.
+No release tag exists yet. Pin a commit SHA: `041a434f6e4d4bf33b393b9606ee0f8fc93662a9` pins engine 0.1.0. Each
+pinned commit pins the engine image by digest in `action.yml`. The `pre-release` branch is the
+earlier trial branch and will be retired.
