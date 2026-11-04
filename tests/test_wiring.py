@@ -291,10 +291,19 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         self.assertTrue(Path(outputs["completion-file"]).is_file())
         self.assertEqual(host_target.read_text(), "preserve host file")
 
-    def test_action_wires_publish_only_after_completed_review(self):
+    def test_action_wires_publish_only_after_an_attested_completion(self):
         action = (ROOT / "action.yml").read_text()
         step = action.split("    - name: Publish review\n", 1)[1].split("    - name:", 1)[0]
-        self.assertIn("always() && !cancelled() && steps.review.outputs.review-completed == 'true'", step)
+        # Either this run's review, or an earlier run's handoff re-attested to this run.
+        # Both arms are an attested completion; neither publishes without one.
+        self.assertIn("always() && !cancelled() && (steps.review.outputs.review-completed == 'true'"
+                      " || steps.republish.outputs.completion-file != '')", step)
+        # A republish publishes the commit that was reviewed, not the PR's head now.
+        self.assertIn("HEAD_SHA: ${{ steps.republish.outputs.head-sha "
+                      "|| steps.prep.outputs.head-sha }}", step)
+        # The engine never runs on a republish, so no model key can be spent on one.
+        review = action.split("    - name: Review\n", 1)[1].split("    - name:", 1)[0]
+        self.assertIn("steps.prep.outputs.republish != 'true'", review)
         self.assertIn("GITHUB_TOKEN: ${{ inputs.github-token }}", step)
         review = action.split("    - name: Review\n", 1)[1].split("    - name:", 1)[0]
         self.assertNotIn("GITHUB_TOKEN: ${{ inputs.github-token }}", review)

@@ -44,6 +44,33 @@ case "$GITHUB_EVENT_NAME" in
       skip "Fork PR: a maintainer can comment $TRIGGER_PHRASE to review it."
     fi
     ;;
+  workflow_dispatch)
+    # A republish posts what an earlier run's rate limit deferred. It reviews nothing, so it
+    # creates no check run (the review's own check already stands on the reviewed commit) and
+    # needs no checkout: the commit it posts against comes from the attested handoff, not
+    # from the pull request's head now.
+    [ -n "${REPUBLISH_SOURCE_RUN_ID:-}" ] || skip "Not a republish dispatch. Skipping."
+    case "${REPUBLISH_PR_NUMBER:-}" in
+      '' | *[!0-9]*)
+        echo "::error::A republish dispatch needs a numeric pull-request number."
+        exit 1
+        ;;
+    esac
+    case "$REPUBLISH_SOURCE_RUN_ID" in
+      *[!0-9]*)
+        echo "::error::A republish dispatch needs a numeric source run ID."
+        exit 1
+        ;;
+    esac
+    pr="$REPUBLISH_PR_NUMBER"
+    [ "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.state')" = "open" ] \
+      || skip "PR #$pr is not open. Skipping."
+    out run true
+    out republish true
+    out pr-number "$pr"
+    echo "Republishing deferred findings on PR #$pr from run $REPUBLISH_SOURCE_RUN_ID."
+    exit 0
+    ;;
   *)
     echo "::error::Unsupported event: $GITHUB_EVENT_NAME. Use issue_comment or pull_request."
     exit 1
