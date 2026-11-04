@@ -427,6 +427,61 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
         self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
         self.assertIn("delivery=success", (self.root / "outputs").read_text())
 
+    def stage_artifact(self, stage=None):
+        return subprocess.run(
+            [sys.executable, str(SCRIPTS / "contract.py"), "stage-artifact",
+             "--output-dir", str(self.out), "--completion-file", str(self.context),
+             "--stage-dir", str(stage or self.root / "artifact")],
+            capture_output=True, text=True, timeout=10)
+
+    def test_the_handoff_artifact_carries_exactly_what_a_republish_needs(self):
+        self.add_finding()
+        staged = self.stage_artifact()
+        self.assertEqual(staged.returncode, 0, staged.stdout + staged.stderr)
+        outputs = dict(line.split("=", 1) for line in staged.stdout.splitlines() if "=" in line)
+        artifact = Path(outputs["artifact-dir"])
+        for name, source in (("handoff/result.json", self.out / "result.json"),
+                             ("handoff/publish/result.json", self.out / "publish/result.json"),
+                             ("handoff/publish/snapshot.json", self.out / "publish/snapshot.json"),
+                             ("completion.json", self.context)):
+            self.assertEqual((artifact / name).read_bytes(), source.read_bytes(), name)
+        # Nothing else travels: the diff and the raw model answers stay in the gated
+        # debug artifact.
+        self.assertEqual(sorted(p.name for p in artifact.rglob("*") if p.is_file()),
+                         ["completion.json", "result.json", "result.json", "snapshot.json"])
+
+    def test_a_staged_artifact_round_trips_through_attestation_into_a_handoff(self):
+        self.add_finding()
+        artifact = Path(dict(line.split("=", 1) for line in
+                             self.stage_artifact().stdout.splitlines() if "=" in line)["artifact-dir"])
+        attested = subprocess.run(
+            [sys.executable, str(SCRIPTS / "contract.py"), "attest-republish",
+             "--artifact-dir", str(artifact), "--control-dir", str(self.root / "later-control"),
+             "--repository", "example/repo", "--pr-number", "7", "--image", IMAGE,
+             "--github-run-id", "4321", "--github-run-attempt", "1"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(attested.returncode, 0, attested.stdout + attested.stderr)
+        later = dict(line.split("=", 1) for line in attested.stdout.splitlines() if "=" in line)
+        handed = subprocess.run(
+            [sys.executable, str(SCRIPTS / "contract.py"), "stage-handoff",
+             "--output-dir", later["output-dir"], "--completion-file", later["completion-file"],
+             "--stage-dir", str(self.root / "later-stage"), "--repository", "example/repo",
+             "--pr-number", "7", "--head-sha", later["head-sha"],
+             "--merge-base-sha", later["merge-base-sha"], "--image", IMAGE,
+             "--github-run-id", "4321", "--github-run-attempt", "1"],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(handed.returncode, 0, handed.stdout + handed.stderr)
+        self.assertEqual(handed.stdout.strip(), "1")  # the finding count the publisher owes
+
+    def test_an_artifact_is_not_staged_from_bytes_the_manifest_does_not_cover(self):
+        self.add_finding()  # rewrites the handoff, leaving self.context stale
+        self.result["findings"][0]["title"] = "Changed after completion"
+        (self.out / "publish/result.json").write_text(json.dumps(self.result))
+        staged = self.stage_artifact()
+        self.assertNotEqual(staged.returncode, 0, staged.stdout)
+        self.assertIn("review bytes changed after completion", staged.stderr)
+        self.assertFalse((self.root / "artifact").exists())
+
     def test_completion_identity_process_status_and_hashes_are_required(self):
         bad = {"contract_version": True, "repository": "other/repo", "pr_number": 8,
                "head_sha": "d" * 40, "merge_base_sha": "d" * 40, "github_run_id": "98",
@@ -712,6 +767,130 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
         self.assertNotIn(marker, result.stdout + result.stderr)
         self.assertNotIn("fixture-write", result.stdout + result.stderr)
         self.assertEqual(len(self.calls()), 1)
+
+
+class RepublishAttestationTests(unittest.TestCase):
+    """A later run posts what an earlier one could not. The earlier run's manifest names that
+    run, so stage-handoff refuses it by construction; attest-republish re-attests the
+    downloaded bytes against this run instead."""
+
+    OLD_RUN, OLD_ATTEMPT = "99", "2"
+    RUN, ATTEMPT = "1234", "1"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        self.artifact = self.root / "downloaded"
+        (self.artifact / "handoff/publish").mkdir(parents=True)
+        self.control = self.root / "control"
+        self.result = {"schema_version": 1, "run_id": "review-123", "head_sha": SHA,
+                       "findings": [], "dropped": [], "skipped": [], "not_reviewed": [],
+                       "stopped_at_budget": False,
+                       "provenance": {"package_version": "0.1.0", "provider": "anthropic"}}
+        self.snapshot = {"schema_version": 1, "provider": "github", "repo": "example/repo",
+                         "pr": {"number": 7, "url": "https://github.com/example/repo/pull/7",
+                                "title": "Fixture"},
+                         "refs": {"base_ref": "main", "base_sha": BASE, "head_ref": "branch",
+                                  "head_sha": SHA, "merge_base_sha": BASE},
+                         "diff_path": "diff.patch", "workspace": "/workspace"}
+        self.action = {"contract_version": 1,
+                       "verdict": {"status": "pass", "reason": "No blocking findings.",
+                                   "blocking_findings": []}, "findings": [],
+                       "skills_run": [], "provenance": {}}
+        self.manifest_overrides = {}
+        self.write_artifact()
+
+    def write_artifact(self):
+        handoff = self.artifact / "handoff"
+        files = {"result": (handoff / "publish/result.json", self.result),
+                 "snapshot": (handoff / "publish/snapshot.json", self.snapshot),
+                 "action_result": (handoff / "result.json", self.action)}
+        manifest = {"contract_version": 1, "repository": "example/repo", "pr_number": 7,
+                    "head_sha": SHA, "merge_base_sha": BASE,
+                    "github_run_id": self.OLD_RUN, "github_run_attempt": self.OLD_ATTEMPT,
+                    "engine_run_id": "review-123", "image": IMAGE,
+                    "engine_exit": 0, "review_verdict": "pass"}
+        for name, (path, value) in files.items():
+            path.write_text(json.dumps(value))
+            manifest[name + "_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        manifest.update(self.manifest_overrides)
+        (self.artifact / "completion.json").write_text(json.dumps(manifest))
+
+    def attest(self, **overrides):
+        argv = {"artifact-dir": str(self.artifact), "control-dir": str(self.control),
+                "repository": "example/repo", "pr-number": "7", "image": IMAGE,
+                "github-run-id": self.RUN, "github-run-attempt": self.ATTEMPT}
+        argv.update(overrides)
+        flags = [f for key, value in argv.items() for f in ("--" + key, value)]
+        return subprocess.run([sys.executable, str(SCRIPTS / "contract.py"),
+                               "attest-republish", *flags],
+                              capture_output=True, text=True, timeout=10)
+
+    def outputs(self, result):
+        return dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+
+    def test_an_earlier_runs_handoff_is_re_attested_to_this_run(self):
+        attested = self.attest()
+        self.assertEqual(attested.returncode, 0, attested.stdout + attested.stderr)
+        outputs = self.outputs(attested)
+        # The reviewed commit comes from the manifest, not from the PR's head now: the PR
+        # may have moved on, and these findings belong to the commit that was reviewed.
+        self.assertEqual(outputs["head-sha"], SHA)
+        self.assertEqual(outputs["merge-base-sha"], BASE)
+        fresh = json.loads(Path(outputs["completion-file"]).read_text())
+        self.assertEqual((fresh["github_run_id"], fresh["github_run_attempt"]),
+                         (self.RUN, self.ATTEMPT))
+        self.assertEqual(fresh["republished_from"], self.OLD_RUN)
+        old = json.loads((self.artifact / "completion.json").read_text())
+        for key in ("result_sha256", "snapshot_sha256", "action_result_sha256",
+                    "engine_run_id", "review_verdict", "head_sha", "image"):
+            self.assertEqual(fresh[key], old[key], key)
+
+    def test_the_re_attested_handoff_is_accepted_by_stage_handoff(self):
+        outputs = self.outputs(self.attest())
+        staged = subprocess.run(
+            [sys.executable, str(SCRIPTS / "contract.py"), "stage-handoff",
+             "--output-dir", outputs["output-dir"],
+             "--completion-file", outputs["completion-file"],
+             "--stage-dir", str(self.root / "stage"), "--repository", "example/repo",
+             "--pr-number", "7", "--head-sha", outputs["head-sha"],
+             "--merge-base-sha", outputs["merge-base-sha"], "--image", IMAGE,
+             "--github-run-id", self.RUN, "--github-run-attempt", self.ATTEMPT],
+            capture_output=True, text=True, timeout=10)
+        self.assertEqual(staged.returncode, 0, staged.stdout + staged.stderr)
+        self.assertEqual(sorted(p.name for p in (self.root / "stage/publish").iterdir()),
+                         ["result.json", "snapshot.json"])
+
+    def test_handoff_bytes_changed_after_the_review_are_refused(self):
+        self.result["findings"] = [{"id": "smuggled"}]
+        (self.artifact / "handoff/publish/result.json").write_text(json.dumps(self.result))
+        attested = self.attest()
+        self.assertNotEqual(attested.returncode, 0, attested.stdout)
+        self.assertIn("review bytes changed after completion", attested.stderr)
+        self.assertFalse((self.control / "completion.json").exists())
+
+    def test_an_artifact_from_another_pr_repo_image_or_failed_review_is_refused(self):
+        for overrides in ({"repository": "other/repo"}, {"pr-number": "8"},
+                          {"image": "ghcr.io/example/engine@sha256:" + "c" * 64}):
+            with self.subTest(overrides=overrides):
+                attested = self.attest(**overrides)
+                self.assertNotEqual(attested.returncode, 0, attested.stdout)
+                self.assertFalse((self.control / "completion.json").exists())
+        for manifest in ({"engine_exit": 1}, {"review_verdict": "error"},
+                         {"contract_version": 2}, {"engine_run_id": ""}):
+            with self.subTest(manifest=manifest):
+                self.manifest_overrides = manifest
+                self.write_artifact()
+                attested = self.attest()
+                self.assertNotEqual(attested.returncode, 0, attested.stdout)
+                self.assertFalse((self.control / "completion.json").exists())
+
+    def test_a_second_attestation_cannot_overwrite_the_first(self):
+        self.assertEqual(self.attest().returncode, 0)
+        again = self.attest()
+        self.assertNotEqual(again.returncode, 0, again.stdout)
+        self.assertIn("completion marker already exists", again.stderr)
 
 
 if __name__ == "__main__":
