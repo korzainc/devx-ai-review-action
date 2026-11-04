@@ -46,6 +46,33 @@ on:
         description: Whether an incomplete review fails the check instead of reporting neutral.
         type: string
         default: "false"
+      auto-republish:
+        description: >-
+          Post findings GitHub's rate limit deferred by dispatching the caller's workflow
+          again, instead of waiting for the author to ask. The caller must declare
+          workflow_dispatch with the republish inputs and grant actions:write.
+        type: string
+        default: "true"
+      max-republish-attempts:
+        description: How many follow-ups in a row may be dispatched for one pull request.
+        type: string
+        default: "3"
+      republish-pr-number:
+        description: Set by the dispatch, not by hand. The pull request to post to.
+        type: string
+        default: ""
+      republish-source-run-id:
+        description: Set by the dispatch, not by hand. The run whose artifact holds the findings.
+        type: string
+        default: ""
+      republish-source-run-attempt:
+        description: Set by the dispatch, not by hand. That run's attempt.
+        type: string
+        default: ""
+      republish-attempt:
+        description: Set by the dispatch, not by hand. Which follow-up this is.
+        type: string
+        default: ""
     secrets:
       ANTHROPIC_API_KEY:
         description: Anthropic key used only by the review engine; used when no repository OpenAI key is passed.
@@ -65,6 +92,7 @@ permissions:
   pull-requests: write
   checks: write
   packages: read
+  actions: write  # dispatch the follow-up, and read the earlier run's handoff artifact
 
 jobs:
   # Introduces on-demand review once, unless this PR was already reviewed.
@@ -123,16 +151,19 @@ jobs:
     # Check the command and association before concurrency can cancel another run.
     if: >-
       !cancelled() &&
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-               github.event.comment.author_association)
+      ((github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                 github.event.comment.author_association)) ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.job-timeout-minutes }}
     concurrency:
-      group: ${{ inputs.concurrency-prefix }}-${{ github.event.issue.number }}
-      cancel-in-progress: true
+      group: ${{ inputs.concurrency-prefix }}-${{ github.event.issue.number || inputs.republish-pr-number }}
+      # A new /review supersedes a running one. A follow-up never cancels a review: it waits,
+      # and posts whatever that review leaves unposted.
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Resolve this repository root at the called workflow's exact revision.
@@ -150,3 +181,9 @@ jobs:
           fail-on-error: ${{ inputs.fail-on-error }}
           upload-debug: ${{ inputs.upload-debug }}
           check-name: ${{ inputs.check-name }}
+          auto-republish: ${{ inputs.auto-republish }}
+          max-republish-attempts: ${{ inputs.max-republish-attempts }}
+          republish-pr-number: ${{ inputs.republish-pr-number }}
+          republish-source-run-id: ${{ inputs.republish-source-run-id }}
+          republish-source-run-attempt: ${{ inputs.republish-source-run-attempt }}
+          republish-attempt: ${{ inputs.republish-attempt }}
