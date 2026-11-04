@@ -194,11 +194,15 @@ sys.exit(code)
         self.assertEqual(args[-2:], [IMAGE, "action-publish"])
         forwarded = [args[i + 1] for i, value in enumerate(args) if value == "-e"]
         timeout = next(f for f in forwarded if f.startswith("PUBLISH_TIMEOUT="))
-        self.assertEqual(set(forwarded) - {timeout},
+        followup = next(f for f in forwarded if f.startswith("PUBLISH_FOLLOWUP="))
+        self.assertEqual(set(forwarded) - {timeout, followup},
                          {"GITHUB_TOKEN", "GITHUB_REPOSITORY", "PR_NUMBER",
                           "REVIEW_OUTPUT_DIR=/github/out", "KORZA_CONTRACT_VERSION=1"})
         # the engine sizes its rate-limit waiting to this, so it matches the step's own limit
         self.assertEqual(timeout, "PUBLISH_TIMEOUT=" + self.env.get("PUBLISH_TIMEOUT", "360"))
+        # whether a follow-up will post what the limit defers, so the summary asks the author
+        # only when nobody else will. Normalised to a boolean here, never passed through raw.
+        self.assertIn(followup, ("PUBLISH_FOLLOWUP=true", "PUBLISH_FOLLOWUP=false"))
         self.assertEqual(args.count("-v"), 2)
         mounts = [args[i+1] for i, arg in enumerate(args) if arg == "-v"]
         self.assertTrue(mounts[0].endswith(":/github/out/publish:ro"))
@@ -426,6 +430,20 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
         published = self.run_publish()
         self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
         self.assertIn("delivery=success", (self.root / "outputs").read_text())
+
+    def test_only_a_literal_true_tells_the_engine_a_follow_up_will_post(self):
+        self.add_finding()
+        self.receipt["posted_comments"] = 1
+        for value, expected in (("true", "true"), ("false", "false"), ("", "false"),
+                                ("True", "false"), ("1", "false"), ("true; rm -rf /", "false")):
+            with self.subTest(value=value):
+                (self.root / "calls").unlink(missing_ok=True)
+                self.env["PUBLISH_FOLLOWUP"] = value
+                published = self.run_publish()
+                self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+                argv = self.calls()[0]["argv"]
+                forwarded = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+                self.assertIn("PUBLISH_FOLLOWUP=" + expected, forwarded)
 
     def stage_artifact(self, stage=None):
         return subprocess.run(
@@ -767,6 +785,93 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
         self.assertNotIn(marker, result.stdout + result.stderr)
         self.assertNotIn("fixture-write", result.stdout + result.stderr)
         self.assertEqual(len(self.calls()), 1)
+
+
+class DispatchTests(unittest.TestCase):
+    """The follow-up that posts deferred findings without the author asking for one."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        gh = self.root / "gh"
+        gh.write_text("#!" + sys.executable + "\n" + '''import json, pathlib, sys
+root = pathlib.Path(__file__).parent
+with (root / "gh-calls").open("a") as stream:
+    stream.write(json.dumps(sys.argv[1:]) + "\\n")
+sys.exit(int((root / "gh-exit").read_text()) if (root / "gh-exit").exists() else 0)
+''')
+        gh.chmod(0o755)
+        self.env = {"PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                    "GITHUB_REPOSITORY": "example/repo", "GH_TOKEN": "fixture-gh",
+                    "GITHUB_WORKFLOW_REF": "example/repo/.github/workflows/ai-review.yml@refs/heads/main",
+                    "GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "2", "PR_NUMBER": "7",
+                    "DEFERRED": "3", "MAX_ATTEMPTS": "3",
+                    "GITHUB_OUTPUT": str(self.root / "outputs")}
+
+    def dispatch(self, **overrides):
+        (self.root / "outputs").write_text("")
+        env = dict(self.env, **overrides)
+        return subprocess.run(["bash", str(SCRIPTS / "dispatch_republish.sh")], env=env,
+                              capture_output=True, text=True, timeout=10)
+
+    def gh_calls(self):
+        path = self.root / "gh-calls"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def outputs(self):
+        return dict(line.split("=", 1) for line in
+                    (self.root / "outputs").read_text().splitlines() if "=" in line)
+
+    def test_a_deferred_publish_dispatches_the_next_attempt_against_its_own_workflow(self):
+        result = self.dispatch()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        argv = self.gh_calls()[0]
+        self.assertEqual(argv[:4], ["workflow", "run", "ai-review.yml", "--ref"])
+        # A branch name: the dispatch API does not take a full refs/heads/... ref.
+        self.assertEqual(argv[4], "main")
+        fields = dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "-f")
+        # The follow-up is told which run holds the findings, and which attempt it is.
+        self.assertEqual(fields, {"pr": "7", "source-run-id": "99",
+                                  "source-run-attempt": "2", "attempt": "1"})
+        self.assertEqual(self.outputs()["dispatched-attempt"], "1")
+
+    def test_each_follow_up_counts_and_the_last_one_stops(self):
+        for attempt, expected in (("1", "2"), ("2", "3")):
+            with self.subTest(attempt=attempt):
+                result = self.dispatch(ATTEMPT=attempt)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.outputs()["dispatched-attempt"], expected)
+        # The third follow-up is the last: a PR that keeps hitting the limit stops here
+        # rather than dispatching forever.
+        before = len(self.gh_calls())
+        result = self.dispatch(ATTEMPT="3")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(self.gh_calls()), before, "dispatched past the attempt bound")
+        self.assertIn("::warning::", result.stdout)
+        self.assertNotIn("dispatched-attempt", self.outputs())
+
+    def test_nothing_deferred_dispatches_nothing(self):
+        for deferred in ("0", "", "not-a-number"):
+            with self.subTest(deferred=deferred):
+                self.assertEqual(self.dispatch(DEFERRED=deferred).returncode, 0)
+                self.assertEqual(self.gh_calls(), [])
+
+    def test_a_dispatch_that_fails_warns_and_leaves_the_job_green(self):
+        (self.root / "gh-exit").write_text("1")
+        result = self.dispatch()
+        # A missed follow-up is recoverable by the next review; a failed step is not.
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("::warning::", result.stdout)
+        self.assertNotIn("dispatched-attempt", self.outputs())
+
+    def test_a_missing_host_context_cannot_dispatch(self):
+        for name in ("GITHUB_WORKFLOW_REF", "GH_TOKEN", "PR_NUMBER", "GITHUB_RUN_ID",
+                     "MAX_ATTEMPTS"):
+            with self.subTest(missing=name):
+                result = self.dispatch(**{name: ""})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.gh_calls(), [])
 
 
 class RepublishAttestationTests(unittest.TestCase):

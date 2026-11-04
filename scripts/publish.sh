@@ -61,12 +61,19 @@ findings="$(env -i PATH="$PATH" python3 "$script_dir/contract.py" stage-handoff 
 set +e
 publisher_started=true
 out delivery error
+# Tells the engine whether a follow-up run will post what it defers, so the summary asks the
+# author to act only when nobody else will.
+publish_followup=false
+if [ "${PUBLISH_FOLLOWUP:-}" = "true" ]; then
+  publish_followup=true
+fi
 env -i PATH="$PATH" GITHUB_TOKEN="$GITHUB_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
   PR_NUMBER="$PR_NUMBER" timeout --signal=TERM --kill-after=5 "$publish_timeout" \
   docker run --rm --init --name "$publisher_container" --pull=never --user "$(id -u):$(id -g)" \
   -v "$stage/publish:/github/out/publish:ro" -v "$stage/run:/github/out/run:rw" \
   -e GITHUB_TOKEN -e GITHUB_REPOSITORY -e PR_NUMBER \
   -e PUBLISH_TIMEOUT="$publish_timeout" \
+  -e PUBLISH_FOLLOWUP="$publish_followup" \
   -e REVIEW_OUTPUT_DIR=/github/out -e KORZA_CONTRACT_VERSION=1 \
   "$REVIEW_IMAGE" action-publish &
 publisher_pid=$!
