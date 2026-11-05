@@ -1,6 +1,6 @@
 # Stub engine image. Stands in for ghcr.io/korzainc/ai-review while the real
 # engine is built, so the action's adapter can be tested end to end.
-FROM alpine:3.22
+FROM alpine:3.24
 
 RUN apk add --no-cache bash git jq curl
 
