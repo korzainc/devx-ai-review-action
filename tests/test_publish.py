@@ -827,9 +827,13 @@ sys.exit(int((root / "gh-exit").read_text()) if (root / "gh-exit").exists() else
         result = self.dispatch()
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         argv = self.gh_calls()[0]
-        self.assertEqual(argv[:4], ["workflow", "run", "ai-review.yml", "--ref"])
+        self.assertEqual(argv[:3], ["workflow", "run", "ai-review.yml"])
+        flags = dict(zip(argv[3::2], argv[4::2]))
         # A branch name: the dispatch API does not take a full refs/heads/... ref.
-        self.assertEqual(argv[4], "main")
+        self.assertEqual(flags["--ref"], "main")
+        # Named, never inferred: gh reads the repository from the checkout in the working
+        # directory, which is not necessarily the one the workflow belongs to.
+        self.assertEqual(flags["--repo"], "example/repo")
         fields = dict(argv[i + 1].split("=", 1) for i, a in enumerate(argv) if a == "-f")
         # The follow-up is told which run holds the findings, and which attempt it is.
         self.assertEqual(fields, {"pr": "7", "source-run-id": "99",
