@@ -63,8 +63,13 @@ case "$GITHUB_EVENT_NAME" in
         ;;
     esac
     pr="$REPUBLISH_PR_NUMBER"
-    [ "$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.state')" = "open" ] \
-      || skip "PR #$pr is not open. Skipping."
+    # Separately from the state: an API failure substitutes an empty string, which would
+    # otherwise skip exactly as a closed pull request does and lose the deferred findings.
+    if ! pr_state="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.state')"; then
+      echo "::error::Could not check whether PR #$pr is open."
+      exit 1
+    fi
+    [ "$pr_state" = "open" ] || skip "PR #$pr is not open. Skipping."
     out run true
     out republish true
     out pr-number "$pr"

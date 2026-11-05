@@ -256,7 +256,10 @@ runs:
         PR_NUMBER: ${{ steps.prep.outputs.pr-number }}
         BASE_SHA: ${{ steps.republish.outputs.merge-base-sha || steps.prep.outputs.base-sha }}
         HEAD_SHA: ${{ steps.republish.outputs.head-sha || steps.prep.outputs.head-sha }}
-        PUBLISH_FOLLOWUP: ${{ inputs.auto-republish }}
+        # True only while a follow-up is still allowed to run. On the last attempt nothing
+        # more will be dispatched, so the summary must ask the author instead of promising.
+        # The bound here and MAX_ATTEMPTS in dispatch_republish.sh must agree.
+        PUBLISH_FOLLOWUP: ${{ inputs.auto-republish == 'true' && fromJSON(inputs.republish-attempt || '0') < fromJSON(inputs.max-republish-attempts) }}
       run: bash "$GITHUB_ACTION_PATH/scripts/publish.sh"
 
     - name: Clean up publisher container
@@ -283,6 +286,7 @@ runs:
           || echo "::warning::Could not stage the handoff; a follow-up will not be able to post deferred findings."
 
     - name: Upload the handoff for a follow-up
+      id: upload-handoff
       if: always() && steps.handoff.outputs.artifact-dir != ''
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
@@ -291,8 +295,10 @@ runs:
         retention-days: 14
         if-no-files-found: ignore
 
+    # Only once the handoff is actually uploaded: a follow-up that cannot download it would
+    # spend a run to fail, and the findings would still be owed.
     - name: Post the rest without asking the author
-      if: always() && !cancelled() && inputs.auto-republish == 'true' && steps.publish.outputs.deferred-comments != '' && steps.publish.outputs.deferred-comments != '0'
+      if: always() && !cancelled() && inputs.auto-republish == 'true' && steps.publish.outputs.deferred-comments != '' && steps.publish.outputs.deferred-comments != '0' && steps.upload-handoff.outcome == 'success'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}

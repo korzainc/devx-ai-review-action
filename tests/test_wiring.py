@@ -311,6 +311,24 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         self.assertIn("PUBLISH_OUTCOME: ${{ steps.publish.outcome }}", final)
         self.assertIn("DELIVERY: ${{ steps.publish.outputs.delivery }}", final)
 
+    def test_a_follow_up_is_promised_only_while_one_can_still_run(self):
+        action = (ROOT / "action.yml").read_text()
+        publish = action.split("    - name: Publish review\n", 1)[1].split("    - name:", 1)[0]
+        # On the last attempt nothing further is dispatched, so the engine must not tell the
+        # author the rest arrives on its own.
+        self.assertIn("PUBLISH_FOLLOWUP: ${{ inputs.auto-republish == 'true' && "
+                      "fromJSON(inputs.republish-attempt || '0') "
+                      "< fromJSON(inputs.max-republish-attempts) }}", publish)
+
+    def test_a_follow_up_is_dispatched_only_once_its_handoff_is_uploaded(self):
+        action = (ROOT / "action.yml").read_text()
+        upload = action.split("    - name: Upload the handoff for a follow-up\n", 1)[1]
+        self.assertIn("id: upload-handoff", upload.split("    - name:", 1)[0])
+        dispatch = action.split("    - name: Post the rest without asking the author\n", 1)[1]
+        # Without the artifact a follow-up can only spend a run and fail to download it.
+        self.assertIn("steps.upload-handoff.outcome == 'success'",
+                      dispatch.split("    - name:", 1)[0])
+
     def test_action_passes_model_keys_and_provider_only_to_review(self):
         action = (ROOT / "action.yml").read_text()
         inputs = "\n" + action.split("\ninputs:\n", 1)[1].split("\nruns:", 1)[0]

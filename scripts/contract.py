@@ -243,8 +243,8 @@ def stage_artifact(args):
     """Copy the handoff and its attestation into a fresh host-private directory for upload.
 
     A later run downloads this to post what the rate limit deferred. Only the review's own
-    findings travel: they are already on the pull request as comments, so the artifact
-    reveals nothing the pull request does not. The diff and the raw model answers live in
+    findings travel. Most are already on the pull request as comments; the deferred ones are
+    not yet, which is why they are worth keeping. The diff and the raw model answers live in
     ``run/``, which stays behind the upload-debug gate.
     """
     output, completion, stage = map(absolute, (args.output_dir, args.completion_file,
