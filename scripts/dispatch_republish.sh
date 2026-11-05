@@ -57,7 +57,10 @@ case "$workflow_ref" in
   '' | refs/*) give_up "Cannot name this workflow's branch; skipping the follow-up." ;;
 esac
 
-if gh workflow run "$workflow_file" --ref "$workflow_ref" \
+# --repo is named, never inferred: gh reads the repository from the checkout in the working
+# directory, which is whatever the consumer's workflow checked out, not necessarily the
+# repository this workflow belongs to.
+if gh workflow run "$workflow_file" --repo "$GITHUB_REPOSITORY" --ref "$workflow_ref" \
   -f pr="$PR_NUMBER" \
   -f source-run-id="$GITHUB_RUN_ID" \
   -f source-run-attempt="$GITHUB_RUN_ATTEMPT" \
