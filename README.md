@@ -154,7 +154,8 @@ four inputs, `actions: write`, and the inputs forwarded to the action. Without t
 pull request, which re-reviews only the unfinished files.
 
 The handoff artifact holds the review's own findings, the PR snapshot and the host
-attestation — nothing the pull request's comments do not already show. The diff and the raw
+attestation. Most of those findings are already on the pull request as comments, but the
+deferred ones are not yet, which is the point of keeping them. The diff and the raw
 model answers stay in the debug artifact, behind `upload-debug`. Both expire after 14 days,
 which bounds how late a follow-up can post.
 

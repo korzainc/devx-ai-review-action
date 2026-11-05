@@ -15,15 +15,19 @@ on:
   workflow_dispatch:
     inputs:
       pr:
+        type: string
         description: Pull request to post the deferred findings to.
         required: true
       source-run-id:
+        type: string
         description: Run whose handoff artifact holds those findings.
         required: true
       source-run-attempt:
+        type: string
         description: That run's attempt, which keys its artifact.
         required: true
       attempt:
+        type: string
         description: Which follow-up this is, counting from 1.
         required: true
 
