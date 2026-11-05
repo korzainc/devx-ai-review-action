@@ -70,8 +70,8 @@ jobs:
       cancel-in-progress: true
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Pinned to the action commit that pins engine 0.1.0.
-      - uses: korzainc/devx-ai-review-action@041a434f6e4d4bf33b393b9606ee0f8fc93662a9
+      # Pinned to the action commit that pins engine 0.1.1.
+      - uses: korzainc/devx-ai-review-action@ab02c64333b5afd4792784630de5170defb0e3c0
         with:
           # Picked in this order: the repo's OpenAI key, its Anthropic key, then the org-level key.
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
