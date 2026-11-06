@@ -83,6 +83,19 @@ class ReusableTests(unittest.TestCase):
                     "contains": lambda values, item: any(github_equal(v, item) for v in values),
                     "fromJSON": json.loads, "cancelled": lambda: False})
                 self.assertEqual(bool(admitted), expected)
+        # The action's own follow-up comes in as a dispatch, with no comment to authorize.
+        # Dispatching needs write access to the repository, and prepare.sh rejects a dispatch
+        # that names no source run. Every other event stays out.
+        for event, expected in (("workflow_dispatch", True), ("schedule", False),
+                                ("push", False), ("pull_request", False)):
+            with self.subTest(event=event):
+                github = SimpleNamespace(event_name=event, event=SimpleNamespace(
+                    issue=SimpleNamespace(pull_request=False),
+                    comment=SimpleNamespace(body="", author_association="NONE")))
+                admitted = github_expression(expression, {"github": github}, allowed_functions={
+                    "contains": lambda values, item: any(github_equal(v, item) for v in values),
+                    "fromJSON": json.loads, "cancelled": lambda: False})
+                self.assertEqual(bool(admitted), expected)
         # A replacement review must stop this job on cancellation re-evaluation.
         github = SimpleNamespace(event_name="issue_comment", event=SimpleNamespace(
             issue=SimpleNamespace(pull_request=True),
@@ -211,7 +224,13 @@ else: raise SystemExit(1)
         self.assertIn("          check-name: ${{ inputs.check-name }}", source)
         self.assertIn("        default: 360", source)
         self.assertIn("      concurrency-prefix:\n", source)
-        self.assertIn("      group: ${{ inputs.concurrency-prefix }}-${{ github.event.issue.number }}", source)
+        # A follow-up has no issue number of its own, so it names the PR it was dispatched for
+        # and lands in the same group as that PR's reviews.
+        self.assertIn("      group: ${{ inputs.concurrency-prefix }}-"
+                      "${{ github.event.issue.number || inputs.republish-pr-number }}", source)
+        # ... but never cancels a running review: it waits and posts what that review leaves.
+        self.assertIn("      cancel-in-progress: "
+                      "${{ github.event_name != 'workflow_dispatch' }}", source)
 
     def test_hint_only_runs_for_ready_same_repository_prs(self):
         hint = self.workflow().split("  hint:\n", 1)[1].split("  review:\n", 1)[0]

@@ -61,12 +61,29 @@ findings="$(env -i PATH="$PATH" python3 "$script_dir/contract.py" stage-handoff 
 set +e
 publisher_started=true
 out delivery error
+# The review step pulls the engine, and a republish has no review step. Pull here when the
+# image is not already local, because the publisher below runs with --pull=never and would
+# otherwise fail after the summary has promised the rest.
+if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1; then
+  if ! docker pull "$REVIEW_IMAGE"; then
+    echo "::error::Could not pull the engine image; nothing was posted."
+    exit 1
+  fi
+fi
+
+# Tells the engine whether a follow-up run will post what it defers, so the summary asks the
+# author to act only when nobody else will.
+publish_followup=false
+if [ "${PUBLISH_FOLLOWUP:-}" = "true" ]; then
+  publish_followup=true
+fi
 env -i PATH="$PATH" GITHUB_TOKEN="$GITHUB_TOKEN" GITHUB_REPOSITORY="$GITHUB_REPOSITORY" \
   PR_NUMBER="$PR_NUMBER" timeout --signal=TERM --kill-after=5 "$publish_timeout" \
   docker run --rm --init --name "$publisher_container" --pull=never --user "$(id -u):$(id -g)" \
   -v "$stage/publish:/github/out/publish:ro" -v "$stage/run:/github/out/run:rw" \
   -e GITHUB_TOKEN -e GITHUB_REPOSITORY -e PR_NUMBER \
   -e PUBLISH_TIMEOUT="$publish_timeout" \
+  -e PUBLISH_FOLLOWUP="$publish_followup" \
   -e REVIEW_OUTPUT_DIR=/github/out -e KORZA_CONTRACT_VERSION=1 \
   "$REVIEW_IMAGE" action-publish &
 publisher_pid=$!

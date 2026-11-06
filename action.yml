@@ -100,6 +100,41 @@ inputs:
       "false" forces it on or off.
     required: false
     default: "auto"  # auto = upload only from private repositories; "true"/"false" force it
+  auto-republish:
+    description: >
+      When GitHub's rate limit or the publish budget leaves findings unposted, dispatch this
+      same workflow to post the rest, with no model call and no comment from the author.
+      Needs actions:write to dispatch, actions:read to download the earlier run's handoff, and
+      the workflow must declare workflow_dispatch with the inputs in the README. "false"
+      leaves the deferred findings for the next review of the pull request.
+    required: false
+    default: "true"
+  max-republish-attempts:
+    description: >
+      How many times in a row a run may dispatch a follow-up. Each dispatch carries the count,
+      so a pull request that keeps hitting the limit stops instead of dispatching forever.
+    required: false
+    default: "3"
+  republish-pr-number:
+    description: >
+      Set by the dispatch, not by hand. The pull request to post to. A workflow_dispatch has no
+      pull request of its own, so the dispatch names it.
+    required: false
+    default: ""
+  republish-source-run-id:
+    description: >
+      Set by the dispatch, not by hand. The run whose handoff artifact holds the findings to
+      post. When set, this run publishes that handoff and never reviews.
+    required: false
+    default: ""
+  republish-source-run-attempt:
+    description: Set by the dispatch, not by hand. That run's attempt, which keys its artifact.
+    required: false
+    default: ""
+  republish-attempt:
+    description: Set by the dispatch, not by hand. Which follow-up this is, counting from 1.
+    required: false
+    default: ""
   image:
     description: Engine image, pinned by digest per release. Override only for testing.
     required: false
@@ -136,7 +171,36 @@ runs:
         TRIGGER_PHRASE: ${{ inputs.trigger-phrase }}
         ALLOWED_ASSOCIATIONS: ${{ inputs.allowed-associations }}
         CHECK_NAME: ${{ inputs.check-name }}
+        REPUBLISH_PR_NUMBER: ${{ inputs.republish-pr-number }}
+        REPUBLISH_SOURCE_RUN_ID: ${{ inputs.republish-source-run-id }}
       run: bash "$GITHUB_ACTION_PATH/scripts/prepare.sh"
+
+    # The earlier run's handoff, not this one's: a republish reviews nothing.
+    - name: Download the deferred findings
+      if: steps.prep.outputs.republish == 'true'
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: ai-review-handoff-pr${{ steps.prep.outputs.pr-number }}-${{ inputs.republish-source-run-id }}-${{ inputs.republish-source-run-attempt }}
+        path: ${{ runner.temp }}/korza-republish
+        run-id: ${{ inputs.republish-source-run-id }}
+        github-token: ${{ inputs.github-token }}
+
+    - name: Attest the deferred findings
+      id: republish
+      if: steps.prep.outputs.republish == 'true'
+      shell: bash
+      run: |
+        env -i PATH="$PATH" python3 -I "$GITHUB_ACTION_PATH/scripts/contract.py" attest-republish \
+          --artifact-dir "$RUNNER_TEMP/korza-republish" \
+          --control-dir "$RUNNER_TEMP/korza-republish-control" \
+          --repository "$GITHUB_REPOSITORY" --pr-number "$PR_NUMBER" --image "$REVIEW_IMAGE" \
+          --source-run-id "$SOURCE_RUN_ID" \
+          --github-run-id "$GITHUB_RUN_ID" --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
+          >> "$GITHUB_OUTPUT"
+      env:
+        PR_NUMBER: ${{ steps.prep.outputs.pr-number }}
+        REVIEW_IMAGE: ${{ inputs.image }}
+        SOURCE_RUN_ID: ${{ inputs.republish-source-run-id }}
 
     - name: Log in to GHCR
       if: steps.prep.outputs.run == 'true'
@@ -148,7 +212,7 @@ runs:
 
     - name: Review
       id: review
-      if: steps.prep.outputs.run == 'true'
+      if: steps.prep.outputs.run == 'true' && steps.prep.outputs.republish != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
@@ -179,19 +243,25 @@ runs:
         ENGINE_CONTAINER: ${{ steps.prep.outputs.engine-container }}
       run: timeout --signal=TERM --kill-after=5 10 docker rm -f "$ENGINE_CONTAINER" > /dev/null 2>&1 || true
 
+    # Either this run's review or an earlier one's, re-attested to this run. Both arms are an
+    # attested completion; neither publishes without one.
     - name: Publish review
       id: publish
-      if: always() && !cancelled() && steps.review.outputs.review-completed == 'true'
+      if: always() && !cancelled() && (steps.review.outputs.review-completed == 'true' || steps.republish.outputs.completion-file != '')
       shell: bash
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
         PUBLISH_TIMEOUT: ${{ inputs.publish-timeout-seconds }}
         REVIEW_IMAGE: ${{ inputs.image }}
-        OUTPUT_DIR: ${{ steps.review.outputs.output-dir }}
-        REVIEW_COMPLETION_FILE: ${{ steps.review.outputs.completion-file }}
+        OUTPUT_DIR: ${{ steps.republish.outputs.output-dir || steps.review.outputs.output-dir }}
+        REVIEW_COMPLETION_FILE: ${{ steps.republish.outputs.completion-file || steps.review.outputs.completion-file }}
         PR_NUMBER: ${{ steps.prep.outputs.pr-number }}
-        BASE_SHA: ${{ steps.prep.outputs.base-sha }}
-        HEAD_SHA: ${{ steps.prep.outputs.head-sha }}
+        BASE_SHA: ${{ steps.republish.outputs.merge-base-sha || steps.prep.outputs.base-sha }}
+        HEAD_SHA: ${{ steps.republish.outputs.head-sha || steps.prep.outputs.head-sha }}
+        # True only while a follow-up is still allowed to run. On the last attempt nothing
+        # more will be dispatched, so the summary must ask the author instead of promising.
+        # The bound here and MAX_ATTEMPTS in dispatch_republish.sh must agree.
+        PUBLISH_FOLLOWUP: ${{ inputs.auto-republish == 'true' && fromJSON(inputs.republish-attempt || '0') < fromJSON(inputs.max-republish-attempts) }}
       run: bash "$GITHUB_ACTION_PATH/scripts/publish.sh"
 
     - name: Clean up publisher container
@@ -200,6 +270,45 @@ runs:
       env:
         PUBLISHER_CONTAINER: ${{ steps.publish.outputs.publisher-container }}
       run: timeout --signal=TERM --kill-after=5 10 docker rm -f "$PUBLISHER_CONTAINER" > /dev/null 2>&1 || true
+
+    # Only when something is actually owed. A handoff from a run that deferred nothing helps
+    # nobody, and it carries findings the review dropped, which were never posted.
+    - name: Stage the handoff for a follow-up
+      id: handoff
+      if: always() && !cancelled() && inputs.auto-republish == 'true' && steps.publish.outputs.deferred-comments != '' && steps.publish.outputs.deferred-comments != '0' && (steps.review.outputs.review-completed == 'true' || steps.republish.outputs.completion-file != '')
+      shell: bash
+      env:
+        OUTPUT_DIR: ${{ steps.republish.outputs.output-dir || steps.review.outputs.output-dir }}
+        REVIEW_COMPLETION_FILE: ${{ steps.republish.outputs.completion-file || steps.review.outputs.completion-file }}
+      run: |
+        env -i PATH="$PATH" python3 -I "$GITHUB_ACTION_PATH/scripts/contract.py" stage-artifact \
+          --output-dir "$OUTPUT_DIR" --completion-file "$REVIEW_COMPLETION_FILE" \
+          --stage-dir "$RUNNER_TEMP/korza-handoff-artifact" >> "$GITHUB_OUTPUT" \
+          || echo "::warning::Could not stage the handoff; a follow-up will not be able to post deferred findings."
+
+    - name: Upload the handoff for a follow-up
+      id: upload-handoff
+      if: always() && steps.handoff.outputs.artifact-dir != ''
+      continue-on-error: true # the comments are already posted; a lost artifact is not fatal
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ai-review-handoff-pr${{ steps.prep.outputs.pr-number }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.handoff.outputs.artifact-dir }}
+        retention-days: 14
+        if-no-files-found: ignore
+
+    # Only once the handoff is actually uploaded: a follow-up that cannot download it would
+    # spend a run to fail, and the findings would still be owed.
+    - name: Post the rest without asking the author
+      if: always() && !cancelled() && inputs.auto-republish == 'true' && steps.publish.outputs.deferred-comments != '' && steps.publish.outputs.deferred-comments != '0' && steps.upload-handoff.outcome == 'success'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ steps.prep.outputs.pr-number }}
+        DEFERRED: ${{ steps.publish.outputs.deferred-comments }}
+        ATTEMPT: ${{ inputs.republish-attempt }}
+        MAX_ATTEMPTS: ${{ inputs.max-republish-attempts }}
+      run: bash "$GITHUB_ACTION_PATH/scripts/dispatch_republish.sh"
 
     - name: Complete check
       if: always() && steps.prep.outputs.check-run-id != ''

@@ -7,16 +7,43 @@ on:
     types: [created]
   pull_request:
     types: [opened, ready_for_review]
+  # Dispatched by the action itself when GitHub's rate limit leaves findings unposted. Do not
+  # run this by hand. Remove this block only together with auto-republish: "false".
+  workflow_dispatch:
+    inputs:
+      pr:
+        type: string
+        description: Pull request to post the deferred findings to.
+        required: true
+      source-run-id:
+        type: string
+        description: Run whose handoff artifact holds those findings.
+        required: true
+      source-run-attempt:
+        type: string
+        description: That run's attempt, which keys its artifact.
+        required: true
+      attempt:
+        type: string
+        description: Which follow-up this is, counting from 1.
+        required: true
 
 permissions:
   contents: read
   pull-requests: write
   checks: write
   packages: read
+  actions: write   # dispatch the follow-up, and read the earlier run's handoff artifact
 
 jobs:
   review:
     uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@ab02c64333b5afd4792784630de5170defb0e3c0
+    with:
+      # Set by the action's own dispatch, never by hand.
+      republish-pr-number: ${{ inputs.pr }}
+      republish-source-run-id: ${{ inputs.source-run-id }}
+      republish-source-run-attempt: ${{ inputs.source-run-attempt }}
+      republish-attempt: ${{ inputs.attempt }}
     secrets:
       # Picked in this order: the repository's own OpenAI key, its own Anthropic key, then the
       # org-level OpenAI key (its own name, since a repo and an org secret can't be told apart).

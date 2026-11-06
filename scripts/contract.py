@@ -224,6 +224,95 @@ def stage_handoff(args):
     print(len(typed_ids))
 
 
+HANDOFF_FILES = (("action_result", "result.json"), ("result", "publish/result.json"),
+                 ("snapshot", "publish/snapshot.json"))
+
+
+def attested_bytes(manifest, output):
+    """The handoff files' exact bytes, each checked against the manifest that attested them."""
+    raws = {}
+    for key, name in HANDOFF_FILES:
+        _, raw = read_json(output / name, 16 * MIB)
+        require(manifest.get(key + "_sha256") == digest(raw),
+                "review bytes changed after completion")
+        raws[name] = raw
+    return raws
+
+
+def stage_artifact(args):
+    """Copy the handoff and its attestation into a fresh host-private directory for upload.
+
+    A later run downloads this to post what the rate limit deferred. Only the review's own
+    findings travel. Most are already on the pull request as comments; the deferred ones are
+    not yet, which is why they are worth keeping. The diff and the raw model answers live in
+    ``run/``, which stays behind the upload-debug gate.
+    """
+    output, completion, stage = map(absolute, (args.output_dir, args.completion_file,
+                                               args.stage_dir))
+    require(not completion.is_relative_to(output) and not stage.is_relative_to(output),
+            "host control files must be outside engine output")
+    manifest, manifest_raw = read_json(completion, 64 * 1024)
+    same_version(manifest, "contract_version")
+    raws = attested_bytes(manifest, output)
+    stage.mkdir(mode=0o700, parents=True)
+    (stage / "handoff/publish").mkdir(mode=0o700, parents=True)
+    for name, raw in list(raws.items()) + [("../completion.json", manifest_raw)]:
+        target = (stage / "handoff" / name).resolve()
+        require(target.is_relative_to(stage), "staged path escapes the artifact")
+        with target.open("xb") as stream:
+            stream.write(raw)
+        target.chmod(0o400)
+    print("artifact-dir=" + str(stage))
+
+
+def attest_republish(args):
+    """Re-attest an earlier run's handoff, downloaded as an artifact, to this run.
+
+    The earlier manifest names the run that produced it, so stage-handoff refuses it by
+    construction. This checks the downloaded bytes against that manifest's digests and the
+    manifest against this job's frozen identity, then writes a fresh manifest bound to this
+    run. The reviewed commit comes from the manifest, never from the PR's head now: these
+    findings belong to the commit that was reviewed, and the PR may have moved on.
+
+    The engine image must still be the one the action pins. A handoff from another image is
+    refused rather than published by an engine that did not produce it.
+    """
+    artifact, control = map(absolute, (args.artifact_dir, args.control_dir))
+    require(not control.is_relative_to(artifact), "control dir is inside the downloaded artifact")
+    manifest, _ = read_json(artifact / "completion.json", 64 * 1024)
+    same_version(manifest, "contract_version")
+    require(manifest.get("repository") == args.repository and
+            manifest.get("pr_number") == int(args.pr_number), "handoff is for another pull request")
+    require(manifest.get("image") == args.image, "handoff is from another engine image")
+    for field in ("head_sha", "merge_base_sha"):
+        require(re.fullmatch(r"[0-9a-f]{40}", str(manifest.get(field))) is not None,
+                "invalid commit SHA")
+    require(type(manifest.get("engine_exit")) is int and manifest["engine_exit"] == 0,
+            "host did not attest process success")
+    require(manifest.get("review_verdict") in ("pass", "fail") and
+            identifier(manifest.get("engine_run_id")), "host did not attest a completed review")
+    require(identifier(manifest.get("github_run_id")), "handoff names no run")
+    # The dispatch names the run this artifact should have come from. Anything else means the
+    # bytes were substituted for another run's, which this manifest never attested.
+    require(manifest["github_run_id"] == args.source_run_id, "handoff is from another run")
+    output = artifact / "handoff"
+    attested_bytes(manifest, output)
+    fresh = dict(manifest, github_run_id=args.github_run_id,
+                 github_run_attempt=args.github_run_attempt,
+                 republished_from=manifest["github_run_id"])
+    control.mkdir(mode=0o700, parents=True, exist_ok=True)
+    target = control / "completion.json"
+    require(not target.exists(), "completion marker already exists")
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as stream:
+        json.dump(fresh, stream, sort_keys=True)
+        stream.write("\n")
+    print("head-sha=" + manifest["head_sha"])
+    print("merge-base-sha=" + manifest["merge_base_sha"])
+    print("output-dir=" + str(output))
+    print("completion-file=" + str(target))
+
+
 def validate_receipt(args):
     require(args.publisher_exit == "0", "publisher exited unsuccessfully; delivery may be partial")
     receipt, _ = read_json(Path(args.stage_dir) / "run/publish/publish.json", 256 * 1024)
@@ -290,9 +379,17 @@ def main():
     receipt = commands.add_parser("validate-receipt")
     for name in ("stage-dir", "repository", "pr-number", "server-url", "findings-count", "publisher-exit"):
         receipt.add_argument("--" + name, required=True)
+    republish = commands.add_parser("attest-republish")
+    for name in ("artifact-dir", "control-dir", "repository", "pr-number", "image",
+                 "source-run-id", "github-run-id", "github-run-attempt"):
+        republish.add_argument("--" + name, required=True)
+    artifact = commands.add_parser("stage-artifact")
+    for name in ("output-dir", "completion-file", "stage-dir"):
+        artifact.add_argument("--" + name, required=True)
     args = parser.parse_args()
     try:
-        (stage_handoff if args.command == "stage-handoff" else validate_receipt)(args)
+        {"stage-handoff": stage_handoff, "validate-receipt": validate_receipt,
+         "attest-republish": attest_republish, "stage-artifact": stage_artifact}[args.command](args)
     except (ValueError, OSError, KeyError, TypeError, RecursionError) as exc:
         # Only require()'s fixed messages are safe; dynamic exceptions can contain
         # paths, untrusted data, engine messages or credentials.
