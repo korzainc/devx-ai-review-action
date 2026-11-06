@@ -46,10 +46,19 @@ case "$GITHUB_WORKFLOW_REF" in
 esac
 workflow_path="${GITHUB_WORKFLOW_REF%@*}"
 workflow_file="${workflow_path##*/}"
-# The dispatch API takes a branch or tag name, not a full ref.
+# The dispatch API takes a branch or tag name, not a full ref. A pull_request run names
+# refs/pull/N/merge, which is neither; the workflow has to exist on the default branch for
+# workflow_dispatch to accept it at all, so that is the right target there.
 workflow_ref="${GITHUB_WORKFLOW_REF#*@}"
-workflow_ref="${workflow_ref#refs/heads/}"
-workflow_ref="${workflow_ref#refs/tags/}"
+case "$workflow_ref" in
+  refs/heads/*) workflow_ref="${workflow_ref#refs/heads/}" ;;
+  refs/tags/*) workflow_ref="${workflow_ref#refs/tags/}" ;;
+  refs/*)
+    if ! workflow_ref="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')"; then
+      give_up "Could not read the default branch; skipping the follow-up."
+    fi
+    ;;
+esac
 case "$workflow_file" in
   '' | *[!A-Za-z0-9._-]*) give_up "Cannot name this workflow file; skipping the follow-up." ;;
 esac
