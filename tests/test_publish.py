@@ -58,6 +58,13 @@ class PublisherTests(unittest.TestCase):
         docker.write_text("#!" + sys.executable + "\n" + '''import json, os, pathlib, signal, sys, time
 root = pathlib.Path(__file__).parent
 args = sys.argv[1:]
+if args[:2] == ["image", "inspect"]:
+    # Absent unless the fixture says otherwise, so publish.sh has to pull.
+    sys.exit(0 if (root / "image-present").exists() else 1)
+if args[:1] == ["pull"]:
+    with (root / "docker-pulls").open("a") as stream:
+        stream.write(json.dumps(args) + "\\n")
+    sys.exit(int((root / "pull-exit").read_text()) if (root / "pull-exit").exists() else 0)
 if args[:2] == ["rm", "-f"]:
     with (root / "cleanup-calls").open("a") as stream:
         stream.write(json.dumps({"argv": args, "env": dict(os.environ)}) + "\\n")
@@ -184,6 +191,30 @@ sys.exit(code)
         self.assertFalse((receipt_file.parent / "run").exists())
         self.assertEqual(json.loads((self.root / "staged-names.json").read_text()),
                          ["result.json", "snapshot.json"])
+
+    def pulls(self):
+        path = self.root / "docker-pulls"
+        return [json.loads(l) for l in path.read_text().splitlines()] if path.exists() else []
+
+    def test_the_publisher_pulls_the_engine_when_it_is_not_already_local(self):
+        # On a republish there is no review step, and that is the only thing that pulls.
+        # publish.sh runs the publisher with --pull=never, so on a cold cache it would fail
+        # after the summary has already promised the rest.
+        published = self.run_publish()
+        self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+        self.assertEqual([p[-1] for p in self.pulls()], [IMAGE])
+
+    def test_the_publisher_does_not_pull_an_engine_it_already_has(self):
+        (self.root / "image-present").write_text("yes")
+        published = self.run_publish()
+        self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+        self.assertEqual(self.pulls(), [])
+
+    def test_a_failed_pull_stops_before_posting_anything(self):
+        (self.root / "pull-exit").write_text("1")
+        published = self.run_publish()
+        self.assertNotEqual(published.returncode, 0, published.stdout)
+        self.assertEqual(self.calls(), [], "the publisher ran without its image")
 
     def test_findings_publish_only_with_github_authority_and_two_isolated_mounts(self):
         self.add_finding()
@@ -476,6 +507,7 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
             [sys.executable, str(SCRIPTS / "contract.py"), "attest-republish",
              "--artifact-dir", str(artifact), "--control-dir", str(self.root / "later-control"),
              "--repository", "example/repo", "--pr-number", "7", "--image", IMAGE,
+             "--source-run-id", "99",
              "--github-run-id", "4321", "--github-run-attempt", "1"],
             capture_output=True, text=True, timeout=10)
         self.assertEqual(attested.returncode, 0, attested.stdout + attested.stderr)
@@ -944,6 +976,7 @@ class RepublishAttestationTests(unittest.TestCase):
     def attest(self, **overrides):
         argv = {"artifact-dir": str(self.artifact), "control-dir": str(self.control),
                 "repository": "example/repo", "pr-number": "7", "image": IMAGE,
+                "source-run-id": self.OLD_RUN,
                 "github-run-id": self.RUN, "github-run-attempt": self.ATTEMPT}
         argv.update(overrides)
         flags = [f for key, value in argv.items() for f in ("--" + key, value)]
@@ -1009,6 +1042,14 @@ class RepublishAttestationTests(unittest.TestCase):
                 attested = self.attest()
                 self.assertNotEqual(attested.returncode, 0, attested.stdout)
                 self.assertFalse((self.control / "completion.json").exists())
+
+    def test_a_handoff_from_a_run_other_than_the_one_named_is_refused(self):
+        # The dispatch names the run whose artifact this should be. Anything else means the
+        # artifact was substituted, so the bytes are not the ones that run attested.
+        attested = self.attest(**{"source-run-id": "4242"})
+        self.assertNotEqual(attested.returncode, 0, attested.stdout)
+        self.assertIn("handoff is from another run", attested.stderr)
+        self.assertFalse((self.control / "completion.json").exists())
 
     def test_a_second_attestation_cannot_overwrite_the_first(self):
         self.assertEqual(self.attest().returncode, 0)

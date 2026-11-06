@@ -194,11 +194,13 @@ runs:
           --artifact-dir "$RUNNER_TEMP/korza-republish" \
           --control-dir "$RUNNER_TEMP/korza-republish-control" \
           --repository "$GITHUB_REPOSITORY" --pr-number "$PR_NUMBER" --image "$REVIEW_IMAGE" \
+          --source-run-id "$SOURCE_RUN_ID" \
           --github-run-id "$GITHUB_RUN_ID" --github-run-attempt "$GITHUB_RUN_ATTEMPT" \
           >> "$GITHUB_OUTPUT"
       env:
         PR_NUMBER: ${{ steps.prep.outputs.pr-number }}
         REVIEW_IMAGE: ${{ inputs.image }}
+        SOURCE_RUN_ID: ${{ inputs.republish-source-run-id }}
 
     - name: Log in to GHCR
       if: steps.prep.outputs.run == 'true'
@@ -269,12 +271,11 @@ runs:
         PUBLISHER_CONTAINER: ${{ steps.publish.outputs.publisher-container }}
       run: timeout --signal=TERM --kill-after=5 10 docker rm -f "$PUBLISHER_CONTAINER" > /dev/null 2>&1 || true
 
-    # Kept whatever the publisher managed, and whatever the gate on upload-debug: a follow-up
-    # needs these bytes, and they are the findings already posted to the pull request, not the
-    # diff or the model's raw answers.
+    # Only when something is actually owed. A handoff from a run that deferred nothing helps
+    # nobody, and it carries findings the review dropped, which were never posted.
     - name: Stage the handoff for a follow-up
       id: handoff
-      if: always() && !cancelled() && inputs.auto-republish == 'true' && (steps.review.outputs.review-completed == 'true' || steps.republish.outputs.completion-file != '')
+      if: always() && !cancelled() && inputs.auto-republish == 'true' && steps.publish.outputs.deferred-comments != '' && steps.publish.outputs.deferred-comments != '0' && (steps.review.outputs.review-completed == 'true' || steps.republish.outputs.completion-file != '')
       shell: bash
       env:
         OUTPUT_DIR: ${{ steps.republish.outputs.output-dir || steps.review.outputs.output-dir }}
@@ -288,6 +289,7 @@ runs:
     - name: Upload the handoff for a follow-up
       id: upload-handoff
       if: always() && steps.handoff.outputs.artifact-dir != ''
+      continue-on-error: true # the comments are already posted; a lost artifact is not fatal
       uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
       with:
         name: ai-review-handoff-pr${{ steps.prep.outputs.pr-number }}-${{ github.run_id }}-${{ github.run_attempt }}

@@ -37,9 +37,11 @@ if [ "$attempt" -gt "$MAX_ATTEMPTS" ]; then
   exit 0
 fi
 
-# owner/repo/.github/workflows/<file>@refs/heads/<branch>: dispatch the same workflow file,
-# on the ref it is running from, so a republish runs the version that reviewed. Under a
-# reusable workflow this names the caller, which is the file that can be dispatched.
+# owner/repo/.github/workflows/<file>@<ref>: dispatch the same workflow file. Under a reusable
+# workflow this names the caller, which is the file that can be dispatched. The ref is the one
+# this run used only when that is a branch or a tag; see the ref handling below, where a
+# pull_request run falls back to the default branch and so may dispatch a different revision
+# of the workflow than the one that reviewed.
 case "$GITHUB_WORKFLOW_REF" in
   "$GITHUB_REPOSITORY"/*) ;;
   *) give_up "This workflow belongs to another repository; skipping the follow-up." ;;

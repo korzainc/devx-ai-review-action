@@ -61,6 +61,16 @@ findings="$(env -i PATH="$PATH" python3 "$script_dir/contract.py" stage-handoff 
 set +e
 publisher_started=true
 out delivery error
+# The review step pulls the engine, and a republish has no review step. Pull here when the
+# image is not already local, because the publisher below runs with --pull=never and would
+# otherwise fail after the summary has promised the rest.
+if ! docker image inspect "$REVIEW_IMAGE" > /dev/null 2>&1; then
+  if ! docker pull "$REVIEW_IMAGE"; then
+    echo "::error::Could not pull the engine image; nothing was posted."
+    exit 1
+  fi
+fi
+
 # Tells the engine whether a follow-up run will post what it defers, so the summary asks the
 # author to act only when nobody else will.
 publish_followup=false
