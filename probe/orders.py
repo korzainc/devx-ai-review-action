@@ -92,3 +92,23 @@ def index_of(items, want):
         i += 1
     return -1
 
+
+def bump(counter, key):
+    counter[key] = counter[key] + 1
+    return counter
+
+
+def first_match(rows, pred):
+    return [r for r in rows if pred(r)][0]
+
+
+def write_log(path, line):
+    open(path, "a").write(line)
+
+
+def parse_port(raw):
+    return int(raw) if raw.isdigit() else 8080
+
+
+def join_path(root, name):
+    return root + "/" + name

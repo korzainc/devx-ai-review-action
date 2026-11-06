@@ -31,7 +31,7 @@ jobs:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           image: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.2-rc1-05203ff@sha256:d358d5fd9ed5c0f76a3391a46a3b1ee5102691cc340e2bb9909fb6f6902c9b48
-          publish-timeout-seconds: "25"
+          publish-timeout-seconds: "3"
           auto-republish: "true"
           max-republish-attempts: "2"
           check-name: DX-459 probe
