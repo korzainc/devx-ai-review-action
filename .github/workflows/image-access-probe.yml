@@ -1,0 +1,14 @@
+# Throwaway: can this repository's job token pull the DX-459 pre-release engine image?
+name: Image access probe
+on: push
+permissions:
+  contents: read
+  packages: read
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          printf '%s' "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          docker pull ghcr.io/korzainc/devx-ai-review-pre-release:0.1.2-rc1-05203ff@sha256:d358d5fd9ed5c0f76a3391a46a3b1ee5102691cc340e2bb9909fb6f6902c9b48
+          echo "PULL OK"
