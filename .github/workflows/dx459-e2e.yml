@@ -1,0 +1,44 @@
+# Throwaway: DX-459 end to end against the real engine, on a real pull request.
+#
+# `uses: ./` runs the action from this branch rather than the released pin, and the image is
+# Jaffrey's pre-release build of shared-workflows#120. publish-timeout-seconds is deliberately
+# far too short for the findings a review of probe/cart.py produces, so the publisher runs out
+# of budget and defers the rest — the same path a GitHub rate-limit refusal takes.
+#
+# Delete this file and probe/ before the PR is anything but a probe.
+name: DX-459 end-to-end probe
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write # post review comments and the summary
+  checks: write # the check on the reviewed commit
+  packages: read # pull the pre-release engine image
+  actions: write # upload/download the handoff, dispatch the follow-up
+
+jobs:
+  probe:
+    if: startsWith(github.head_ref, 'atharvtiwari/dx-459-e2e-dummy')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: review
+        uses: ./
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          image: ghcr.io/korzainc/devx-ai-review-pre-release:0.1.2-rc1-05203ff@sha256:d358d5fd9ed5c0f76a3391a46a3b1ee5102691cc340e2bb9909fb6f6902c9b48
+          publish-timeout-seconds: "25"
+          auto-republish: "true"
+          max-republish-attempts: "2"
+          check-name: DX-459 probe
+      - name: What the run reported
+        if: always()
+        run: |
+          echo "verdict:  ${{ steps.review.outputs.verdict }}"
+          echo "findings: ${{ steps.review.outputs.findings }}"
+          echo "delivery: ${{ steps.review.outputs.delivery }}"
+          echo "summary:  ${{ steps.review.outputs.summary-url }}"
