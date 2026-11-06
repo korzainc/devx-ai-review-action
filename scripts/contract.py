@@ -235,11 +235,20 @@ def validate_receipt(args):
     require(type(moved) is bool and type(summary_only) is bool, "invalid staleness flags")
     require(isinstance(receipt.get("notes"), list) and all(text(v) for v in receipt["notes"]),
             "invalid receipt notes")
+    # GitHub's rate limit or the publish budget can stop the publisher part-way; those
+    # findings are owed, not lost, and an engine older than the field defers nothing.
+    deferred = receipt.get("deferred", [])
+    require(isinstance(deferred, list) and all(identifier(v) for v in deferred) and
+            len(set(deferred)) == len(deferred), "invalid deferred findings")
     if summary_only:
-        require(moved and posted == 0 and couldnt == 0 and already == 0,
+        require(posted == 0 and couldnt == 0 and already == 0,
                 "inconsistent stale summary receipt")
+        # Nothing was posted either because the review is stale, or because every
+        # finding is still owed. Anything else does not account for the findings.
+        require(moved or len(deferred) == int(args.findings_count),
+                "receipt does not account for findings")
     else:
-        require(posted + couldnt + already == int(args.findings_count),
+        require(posted + couldnt + already + len(deferred) == int(args.findings_count),
                 "receipt does not account for findings")
     require(args.server_url == "https://github.com", "publisher supports only https://github.com")
     expected = args.server_url + "/" + args.repository + "/pull/" + args.pr_number
@@ -250,6 +259,7 @@ def validate_receipt(args):
     saved = {"contract_version": 1, "repository": args.repository,
              "pr_number": int(args.pr_number), "publisher": "github", "posted_comments": posted,
              "couldnt_place": couldnt, "already_posted": already,
+             "deferred_comments": len(deferred),
              "head_moved": moved, "summary_only": summary_only,
              "url": receipt["url"]}
     receipt_file = absolute(args.stage_dir) / "receipt.json"
@@ -262,6 +272,7 @@ def validate_receipt(args):
     print("summary-url=" + receipt["url"])
     print("posted-comments=" + str(posted))
     print("couldnt-place=" + str(couldnt))
+    print("deferred-comments=" + str(len(deferred)))
     print("head-moved=" + str(moved).lower())
     print("summary-only=" + str(summary_only).lower())
     print("receipt-file=" + str(receipt_file))
