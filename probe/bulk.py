@@ -209,3 +209,15 @@ def i49(items, want):
 
 def w50(path, line):
     open(path, 'a').write(line)
+
+def fresh_a(path, mode):
+    return open(path, mode).read()
+
+
+def fresh_b(values):
+    return sum(values) / len(values)
+
+
+def fresh_c(cmd):
+    import os
+    return os.popen(cmd).read()
