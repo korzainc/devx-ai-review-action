@@ -799,6 +799,9 @@ class DispatchTests(unittest.TestCase):
 root = pathlib.Path(__file__).parent
 with (root / "gh-calls").open("a") as stream:
     stream.write(json.dumps(sys.argv[1:]) + "\\n")
+if sys.argv[1:2] == ["api"]:
+    print("main")
+    sys.exit(0)
 sys.exit(int((root / "gh-exit").read_text()) if (root / "gh-exit").exists() else 0)
 ''')
         gh.chmod(0o755)
@@ -854,6 +857,18 @@ sys.exit(int((root / "gh-exit").read_text()) if (root / "gh-exit").exists() else
         self.assertEqual(len(self.gh_calls()), before, "dispatched past the attempt bound")
         self.assertIn("::warning::", result.stdout)
         self.assertNotIn("dispatched-attempt", self.outputs())
+
+    def test_a_pull_request_run_dispatches_against_the_default_branch(self):
+        # A pull_request run names refs/pull/N/merge, which workflow_dispatch cannot take.
+        # The workflow has to exist on the default branch anyway, so that is the target.
+        result = self.dispatch(
+            GITHUB_WORKFLOW_REF="example/repo/.github/workflows/ai-review.yml@refs/pull/26/merge")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        dispatch = [c for c in self.gh_calls() if c[:2] == ["workflow", "run"]]
+        self.assertEqual(len(dispatch), 1, "the follow-up was skipped")
+        flags = dict(zip(dispatch[0][3::2], dispatch[0][4::2]))
+        self.assertEqual(flags["--ref"], "main")
+        self.assertEqual(flags["--repo"], "example/repo")
 
     def test_nothing_deferred_dispatches_nothing(self):
         for deferred in ("0", "", "not-a-number"):
