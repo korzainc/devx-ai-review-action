@@ -15,6 +15,7 @@ permissions:
   pull-requests: write   # review comments and the eyes reaction
   checks: write          # the pass/fail check on the PR head commit
   packages: read         # pull the engine image with GITHUB_TOKEN (korzainc repos)
+  # security-events: write  # only with upload-sarif: true, to upload to code scanning
 
 jobs:
   # Tells the author how to ask for a review, once per PR.
@@ -80,3 +81,6 @@ jobs:
           # Repos outside korzainc also need:
           # registry-token: ${{ secrets.KORZA_REGISTRY_TOKEN }}
           # registry-username: korza-registry-bot
+          # Code scanning upload: off for the pilot (see Security in the README).
+          # Needs security-events: write above.
+          # upload-sarif: true
