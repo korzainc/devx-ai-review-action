@@ -292,6 +292,9 @@ def attest_republish(args):
     require(manifest.get("review_verdict") in ("pass", "fail") and
             identifier(manifest.get("engine_run_id")), "host did not attest a completed review")
     require(identifier(manifest.get("github_run_id")), "handoff names no run")
+    # The dispatch names the run this artifact should have come from. Anything else means the
+    # bytes were substituted for another run's, which this manifest never attested.
+    require(manifest["github_run_id"] == args.source_run_id, "handoff is from another run")
     output = artifact / "handoff"
     attested_bytes(manifest, output)
     fresh = dict(manifest, github_run_id=args.github_run_id,
@@ -378,7 +381,7 @@ def main():
         receipt.add_argument("--" + name, required=True)
     republish = commands.add_parser("attest-republish")
     for name in ("artifact-dir", "control-dir", "repository", "pr-number", "image",
-                 "github-run-id", "github-run-attempt"):
+                 "source-run-id", "github-run-id", "github-run-attempt"):
         republish.add_argument("--" + name, required=True)
     artifact = commands.add_parser("stage-artifact")
     for name in ("output-dir", "completion-file", "stage-dir"):
