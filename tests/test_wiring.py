@@ -311,6 +311,16 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         self.assertIn("PUBLISH_OUTCOME: ${{ steps.publish.outcome }}", final)
         self.assertIn("DELIVERY: ${{ steps.publish.outputs.delivery }}", final)
 
+    def test_no_handoff_leaves_a_public_repository(self):
+        action = (ROOT / "action.yml").read_text()
+        # result.json carries findings the review dropped, which are never posted. Until the
+        # engine emits a redacted handoff, that must not become a public artifact.
+        for name in ("Stage the handoff for a follow-up",
+                     "Post the rest without asking the author"):
+            with self.subTest(step=name):
+                step = action.split(f"    - name: {name}\n", 1)[1].split("    - name:", 1)[0]
+                self.assertIn("github.event.repository.private", step)
+
     def test_a_follow_up_is_promised_only_while_one_can_still_run(self):
         action = (ROOT / "action.yml").read_text()
         publish = action.split("    - name: Publish review\n", 1)[1].split("    - name:", 1)[0]

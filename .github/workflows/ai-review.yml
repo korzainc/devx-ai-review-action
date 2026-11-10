@@ -46,13 +46,6 @@ on:
         description: Whether an incomplete review fails the check instead of reporting neutral.
         type: string
         default: "false"
-      auto-republish:
-        description: >-
-          Post findings GitHub's rate limit deferred by dispatching the caller's workflow
-          again, instead of waiting for the author to ask. The caller must declare
-          workflow_dispatch with the republish inputs and grant actions:write.
-        type: string
-        default: "true"
       max-republish-attempts:
         description: How many follow-ups in a row may be dispatched for one pull request.
         type: string
@@ -92,7 +85,6 @@ permissions:
   pull-requests: write
   checks: write
   packages: read
-  actions: write  # dispatch the follow-up, and read the earlier run's handoff artifact
 
 jobs:
   # Introduces on-demand review once, unless this PR was already reviewed.
@@ -181,7 +173,7 @@ jobs:
           fail-on-error: ${{ inputs.fail-on-error }}
           upload-debug: ${{ inputs.upload-debug }}
           check-name: ${{ inputs.check-name }}
-          auto-republish: ${{ inputs.auto-republish }}
+          auto-republish: "false" # needs actions: write; use the composite action
           max-republish-attempts: ${{ inputs.max-republish-attempts }}
           republish-pr-number: ${{ inputs.republish-pr-number }}
           republish-source-run-id: ${{ inputs.republish-source-run-id }}

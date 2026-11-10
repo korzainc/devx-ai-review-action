@@ -925,6 +925,65 @@ sys.exit(int((root / "gh-exit").read_text()) if (root / "gh-exit").exists() else
                 self.assertEqual(self.gh_calls(), [])
 
 
+class SourceRunCheckTests(unittest.TestCase):
+    """A run id says nothing about what produced the handoff."""
+
+    OK = ["example/repo", "example/repo", ".github/workflows/ai-review.yml",
+          "issue_comment", "main"]
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name).resolve()
+        gh = self.root / "gh"
+        gh.write_text("#!" + sys.executable + "\n" + '''import pathlib, sys
+root = pathlib.Path(__file__).parent
+print("\\t".join((root / "run").read_text().split("|")))
+''')
+        gh.chmod(0o755)
+        self.env = {"PATH": str(self.root) + os.pathsep + os.environ["PATH"],
+                    "GITHUB_REPOSITORY": "example/repo", "GH_TOKEN": "fixture",
+                    "GITHUB_WORKFLOW_REF":
+                        "example/repo/.github/workflows/ai-review.yml@refs/heads/main",
+                    "SOURCE_RUN_ID": "99",
+                    "GITHUB_OUTPUT": str(self.root / "outputs")}
+
+    def check(self, fields=None, **env):
+        (self.root / "run").write_text("|".join(fields or self.OK))
+        (self.root / "outputs").write_text("")
+        return subprocess.run(["bash", str(SCRIPTS / "check_source_run.sh")],
+                              env=dict(self.env, **env), capture_output=True,
+                              text=True, timeout=10)
+
+    def test_this_workflows_own_run_is_accepted(self):
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("source-run-branch=main", (self.root / "outputs").read_text())
+
+    def test_a_run_from_elsewhere_is_refused(self):
+        cases = {
+            "another repository": ["other/repo", "example/repo",
+                                   ".github/workflows/ai-review.yml", "issue_comment", "main"],
+            "a fork's branch": ["example/repo", "fork/repo",
+                                ".github/workflows/ai-review.yml", "issue_comment", "main"],
+            "another workflow": ["example/repo", "example/repo",
+                                 ".github/workflows/release.yml", "issue_comment", "main"],
+            "an event": ["example/repo", "example/repo",
+                         ".github/workflows/ai-review.yml", "schedule", "main"],
+        }
+        for why, fields in cases.items():
+            with self.subTest(why=why):
+                result = self.check(fields)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                # Workflow commands go to stdout, which is where the runner reads them.
+                self.assertIn("not one of this workflow's", result.stdout)
+
+    def test_a_non_numeric_run_id_is_refused(self):
+        result = self.check(SOURCE_RUN_ID="12; rm -rf /")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.check(SOURCE_RUN_ID="").returncode, 1)
+
+
 class RepublishAttestationTests(unittest.TestCase):
     """A later run posts what an earlier one could not. The earlier run's manifest names that
     run, so stage-handoff refuses it by construction; attest-republish re-attests the

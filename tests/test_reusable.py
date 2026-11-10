@@ -216,6 +216,18 @@ else: raise SystemExit(1)
         self.assertNotIn("secrets: inherit", source)
 
 
+    def test_the_reusable_workflow_cannot_auto_republish(self):
+        source = self.workflow()
+        # Dispatching a follow-up needs actions: write, and a called workflow cannot ask for
+        # more than its caller granted: every existing caller would fail at startup.
+        head = source.split("\njobs:", 1)[0]
+        self.assertNotIn("actions: write", head)
+        # Off at the action, not merely defaulted off: the input is still forwarded, so a
+        # caller passing "true" would otherwise turn it back on.
+        call = source.split("      - uses: $/\n", 1)[1]
+        self.assertIn('auto-republish: "false"', call)
+        self.assertNotIn("auto-republish: ${{ inputs.auto-republish }}", call)
+
     def test_caller_overrides_keep_check_identity_and_job_deadline(self):
         source = self.workflow()
         self.assertIn("      check-name:\n", source)
