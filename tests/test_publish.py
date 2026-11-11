@@ -370,6 +370,63 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
                 self.receipt.update(updates)
                 self.assertNotEqual(self.run_publish().returncode, 0)
 
+    def add_second_finding(self):
+        for collection in (self.result["findings"], self.action["findings"]):
+            second = copy.deepcopy(collection[0])
+            second["id"] = "dar-second"
+            collection.append(second)
+        self.write_handoff()
+
+    def test_findings_the_rate_limit_deferred_are_owed_not_lost(self):
+        self.add_finding()
+        self.add_second_finding()
+        self.receipt.update(posted_comments=1, deferred=["dar-second"])
+        published = self.run_publish()
+        self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+        outputs = dict(line.split("=", 1) for line in
+                       (self.root / "outputs").read_text().splitlines())
+        self.assertEqual(outputs["delivery"], "success")
+        self.assertEqual(outputs["deferred-comments"], "1")
+        saved = json.loads(Path(outputs["receipt-file"]).read_text())
+        self.assertEqual(saved["deferred_comments"], 1)
+
+    def test_a_summary_only_receipt_may_owe_every_finding_instead_of_being_stale(self):
+        self.add_finding()
+        self.receipt.update(summary_only=True, deferred=["dar-fixture"])
+        published = self.run_publish()
+        self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+        outputs = dict(line.split("=", 1) for line in
+                       (self.root / "outputs").read_text().splitlines())
+        self.assertEqual(outputs["delivery"], "success")
+        self.assertEqual(outputs["deferred-comments"], "1")
+
+    def test_deferred_must_be_unique_identifiers_that_do_not_overfill_the_count(self):
+        self.add_finding()
+        self.add_second_finding()
+        for bad in (["dar-second", "dar-second"], [""], [1], [None], ["a", "b", "c"],
+                    "dar-second", {}, True, 1):
+            with self.subTest(deferred=bad):
+                self.receipt.update(posted_comments=1, deferred=bad)
+                published = self.run_publish()
+                self.assertNotEqual(published.returncode, 0,
+                                    published.stdout + published.stderr)
+                self.assertNotIn("delivery=success", (self.root / "outputs").read_text())
+
+    def test_a_summary_only_receipt_that_owes_nothing_must_be_stale(self):
+        self.add_finding()
+        self.receipt.update(summary_only=True, head_moved=False)
+        published = self.run_publish()
+        self.assertNotEqual(published.returncode, 0, published.stdout + published.stderr)
+        self.assertNotIn("delivery=success", (self.root / "outputs").read_text())
+
+    def test_a_review_with_no_findings_may_be_summary_only_without_a_moved_head(self):
+        # The publish-reads deadline gives up before posting anything; with no findings
+        # there is nothing owed and nothing stale about it.
+        self.receipt.update(summary_only=True, head_moved=False)
+        published = self.run_publish()
+        self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+        self.assertIn("delivery=success", (self.root / "outputs").read_text())
+
     def test_completion_identity_process_status_and_hashes_are_required(self):
         bad = {"contract_version": True, "repository": "other/repo", "pr_number": 8,
                "head_sha": "d" * 40, "merge_base_sha": "d" * 40, "github_run_id": "98",
@@ -471,7 +528,7 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
 
     def test_invalid_counts_flags_and_destinations_cannot_report_success(self):
         cases = [("publisher", "html"), ("posted_comments", True), ("posted_comments", -1),
-                 ("posted_comments", 1), ("couldnt_place", 1), ("summary_only", True),
+                 ("posted_comments", 1), ("couldnt_place", 1),
                  ("head_moved", "false"), ("notes", [1]), ("url", None),
                  ("url", "https://evil.example/example/repo/pull/7#issuecomment-1"),
                  ("url", "https://github.com/example/repo/pull/8#issuecomment-1"),
