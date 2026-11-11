@@ -327,6 +327,7 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         # On the last attempt nothing further is dispatched, so the engine must not tell the
         # author the rest arrives on its own.
         self.assertIn("PUBLISH_FOLLOWUP: ${{ inputs.auto-republish == 'true' && "
+                      "github.event.repository.private && "
                       "fromJSON(inputs.republish-attempt || '0') "
                       "< fromJSON(inputs.max-republish-attempts) }}", publish)
 

@@ -30,31 +30,17 @@ on:
     types: [created]
   pull_request:
     types: [opened, ready_for_review]
-  # Dispatched by the action itself to post findings GitHub's rate limit deferred.
-  # Do not run it by hand. See "Findings the rate limit defers".
-  workflow_dispatch:
-    inputs:
-      pr: {description: Pull request to post to., required: true}
-      source-run-id: {description: Run whose artifact holds the findings., required: true}
-      source-run-attempt: {description: That run's attempt., required: true}
-      attempt: {description: Which follow-up this is., required: true}
 
 permissions:
   contents: read
   pull-requests: write
   checks: write
   packages: read
-  actions: write   # dispatch the follow-up, and read the earlier run's handoff artifact
 
 jobs:
   review:
     # The commit that pins engine 0.1.1.
     uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@ab02c64333b5afd4792784630de5170defb0e3c0
-    with:
-      republish-pr-number: ${{ inputs.pr }}
-      republish-source-run-id: ${{ inputs.source-run-id }}
-      republish-source-run-attempt: ${{ inputs.source-run-attempt }}
-      republish-attempt: ${{ inputs.attempt }}
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -132,7 +118,7 @@ first-line and optional argument handling.
 | `issue_comment` | Always. On-demand reviews via `/review`. | Only `allowed-associations` can trigger. Works on fork PRs. |
 | `pull_request` (`opened`, `ready_for_review`) | Always. Posts a one-time comment telling the author how to request a review. | Never runs a review: every review costs model tokens. |
 | `pull_request` (every push) | Once a skill blocks merges. | Add `synchronize` and `reopened`, and let the review job run on `pull_request`, so the gate cannot be skipped. Fork PRs are skipped because their token is read-only; a maintainer can comment `/review` instead. |
-| `workflow_dispatch` | Always, unless `auto-republish: "false"`. | Dispatched by the action, not by people. Posts findings a previous run could not. |
+| `workflow_dispatch` | Only with `auto-republish: "true"` (composite action, private repository). | Dispatched by the action, not by people. Posts findings a previous run could not. |
 
 ## Findings the rate limit defers
 
@@ -142,16 +128,21 @@ and the engine's own ceiling). Findings it could not post in time are *deferred*
 owed, never lost. They are named in the publish receipt and their files are marked
 unfinished in the review state.
 
-With `auto-republish: true` (the default) the run then dispatches your own workflow again,
+With `auto-republish: "true"` the run then dispatches your own workflow again,
 passing the run whose artifact holds the findings. That follow-up downloads the handoff,
 re-attests it to itself, and posts only what is missing — no model call, so no extra cost.
 It repeats until nothing is owed or `max-republish-attempts` is reached, after which the
 summary asks for a `/review` instead.
 
-This needs three things in the consuming workflow: the `workflow_dispatch` block with those
-four inputs, `actions: write`, and the inputs forwarded to the action. Without them, set
-`auto-republish: "false"`; deferred findings are then posted by the next review of the
-pull request, which re-reviews only the unfinished files.
+It is off by default, and works only with the composite action in a private repository.
+The reusable workflow keeps it off, so its callers never need `actions: write`, and a public
+repository never dispatches, because the handoff carries findings the review dropped. To opt
+in, the consuming workflow needs `auto-republish: "true"`, `actions: write`, a
+`workflow_dispatch` block with the string inputs `pr`, `source-run-id`, `source-run-attempt`
+and `attempt`, and those forwarded to the action as `republish-pr-number`,
+`republish-source-run-id`, `republish-source-run-attempt` and `republish-attempt`, pinned to
+a commit that has them. Left off, deferred findings are posted by the next review of the pull
+request, which re-reviews only the unfinished files.
 
 The handoff artifact holds the review's own findings, the PR snapshot and the host
 attestation. Most of those findings are already on the pull request as comments, but the
@@ -205,7 +196,7 @@ require that one. Comments and the check are posted as `github-actions[bot]`.
 | `publish-timeout-seconds` | `360` | Hard outer publisher timeout in seconds (1 through 3600), including container startup, followed by bounded termination and cleanup. |
 | `upload-sarif` | `false` | Also upload to code scanning. Needs `security-events: write`. |
 | `upload-debug` | `auto` | Keep review-stage logs, model calls, findings and inputs for up to 14 days. `auto` uploads only when the repository is private; `true` or `false` forces it. See the data note below. |
-| `auto-republish` | `true` | Post findings the rate limit deferred by dispatching this workflow again, instead of waiting for the author. Needs `actions: write` and the `workflow_dispatch` block. |
+| `auto-republish` | `false` | Opt in to posting findings the rate limit deferred by dispatching this workflow again, instead of waiting for the next review. Composite action in a private repository only. Needs `actions: write` and the `workflow_dispatch` block. |
 | `max-republish-attempts` | `3` | How many follow-ups in a row may be dispatched for one pull request. |
 | `republish-pr-number`, `republish-source-run-id`, `republish-source-run-attempt`, `republish-attempt` | empty | Set by the action's own dispatch. Never set these by hand. |
 | `image` | pinned per release | Engine image digest. Override only for testing. |

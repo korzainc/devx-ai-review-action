@@ -271,8 +271,9 @@ runs:
         HEAD_SHA: ${{ steps.republish.outputs.head-sha || steps.prep.outputs.head-sha }}
         # True only while a follow-up is still allowed to run. On the last attempt nothing
         # more will be dispatched, so the summary must ask the author instead of promising.
-        # The bound here and MAX_ATTEMPTS in dispatch_republish.sh must agree.
-        PUBLISH_FOLLOWUP: ${{ inputs.auto-republish == 'true' && fromJSON(inputs.republish-attempt || '0') < fromJSON(inputs.max-republish-attempts) }}
+        # The bound here and MAX_ATTEMPTS in dispatch_republish.sh must agree, and like the
+        # dispatch it holds only in a private repository.
+        PUBLISH_FOLLOWUP: ${{ inputs.auto-republish == 'true' && github.event.repository.private && fromJSON(inputs.republish-attempt || '0') < fromJSON(inputs.max-republish-attempts) }}
       run: bash "$GITHUB_ACTION_PATH/scripts/publish.sh"
 
     - name: Clean up publisher container

@@ -9,34 +9,12 @@ on:
     types: [opened, ready_for_review]
     # Once a skill blocks merges, add synchronize and reopened here and let the review job run
     # on pull_request too, so the gate cannot be skipped.
-  # The action dispatches this itself when GitHub's rate limit leaves findings unposted, so
-  # the rest arrive without the author asking. These inputs are its own; do not run this by
-  # hand. Remove this block only together with auto-republish: "false".
-  workflow_dispatch:
-    inputs:
-      pr:
-        type: string
-        description: Pull request to post the deferred findings to.
-        required: true
-      source-run-id:
-        type: string
-        description: Run whose handoff artifact holds those findings.
-        required: true
-      source-run-attempt:
-        type: string
-        description: That run's attempt, which keys its artifact.
-        required: true
-      attempt:
-        type: string
-        description: Which follow-up this is, counting from 1.
-        required: true
 
 permissions:
   contents: read
   pull-requests: write   # review comments and the eyes reaction
   checks: write          # the pass/fail check on the PR head commit
   packages: read         # pull the engine image with GITHUB_TOKEN (korzainc repos)
-  actions: write         # dispatch the follow-up, and read the earlier run's handoff artifact
 
 jobs:
   # Tells the author how to ask for a review, once per PR.
@@ -98,11 +76,6 @@ jobs:
       # Pinned to the action commit that pins engine 0.1.1.
       - uses: korzainc/devx-ai-review-action@ab02c64333b5afd4792784630de5170defb0e3c0
         with:
-          # Set by the action's own dispatch, never by hand.
-          republish-pr-number: ${{ inputs.pr }}
-          republish-source-run-id: ${{ inputs.source-run-id }}
-          republish-source-run-attempt: ${{ inputs.source-run-attempt }}
-          republish-attempt: ${{ inputs.attempt }}
           # Picked in this order: the repo's OpenAI key, its Anthropic key, then the org-level key.
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}

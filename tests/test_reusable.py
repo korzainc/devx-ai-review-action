@@ -228,6 +228,20 @@ else: raise SystemExit(1)
         self.assertIn('auto-republish: "false"', call)
         self.assertNotIn("auto-republish: ${{ inputs.auto-republish }}", call)
 
+    def test_reusable_callers_are_not_asked_for_republish_setup(self):
+        # The reusable workflow never republishes, so its documented callers need no dispatch
+        # block, no actions: write and no republish inputs. The inputs would also fail at
+        # startup against a pinned commit that does not define them.
+        readme = (ROOT / "README.md").read_text()
+        quick_start = readme.split("```yaml\n", 1)[1].split("```", 1)[0]
+        example = (ROOT / "examples/ai-review-reusable.yml").read_text()
+        for name, text in (("README quick start", quick_start), ("example", example)):
+            with self.subTest(source=name):
+                self.assertIn("ai-review.yml@", text)
+                self.assertNotIn("workflow_dispatch", text)
+                self.assertNotIn("actions: write", text)
+                self.assertNotIn("republish-", text)
+
     def test_caller_overrides_keep_check_identity_and_job_deadline(self):
         source = self.workflow()
         self.assertIn("      check-name:\n", source)
