@@ -1,7 +1,7 @@
 # Korza AI Code Review
 
-> **Engine 0.1.1.** Pin the action to commit `ab02c64` (full SHA below), which pins the
-> released engine image `ghcr.io/korzainc/devx-ai-review:0.1.1`, a private package: a repo needs
+> **Engine 0.1.2.** Pin the action to commit `a9ee8cc` (full SHA below), which pins the
+> released engine image `ghcr.io/korzainc/devx-ai-review:0.1.2`, a private package: a repo needs
 > read access on it ("Manage Actions access") to run the action. The `pre-release` branch stays
 > on the earlier release candidate until the repos that follow it move.
 
@@ -39,8 +39,8 @@ permissions:
 
 jobs:
   review:
-    # The commit that pins engine 0.1.1.
-    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@ab02c64333b5afd4792784630de5170defb0e3c0
+    # The commit that pins engine 0.1.2.
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@a9ee8cceabf487c168a1f769163a4805834fd5e9
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -282,6 +282,6 @@ hung engine does not keep running on a self-hosted runner.
 
 ## Versioning
 
-No release tag exists yet. Pin a commit SHA: `ab02c64333b5afd4792784630de5170defb0e3c0` pins engine 0.1.1. Each
+No release tag exists yet. Pin a commit SHA: `a9ee8cceabf487c168a1f769163a4805834fd5e9` pins engine 0.1.2. Each
 pinned commit pins the engine image by digest in `action.yml`. The `pre-release` branch is the
 earlier trial branch and will be retired.
