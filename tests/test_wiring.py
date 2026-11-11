@@ -291,16 +291,54 @@ sys.exit(int(os.environ.get("FIXTURE_EXIT", "0")))
         self.assertTrue(Path(outputs["completion-file"]).is_file())
         self.assertEqual(host_target.read_text(), "preserve host file")
 
-    def test_action_wires_publish_only_after_completed_review(self):
+    def test_action_wires_publish_only_after_an_attested_completion(self):
         action = (ROOT / "action.yml").read_text()
         step = action.split("    - name: Publish review\n", 1)[1].split("    - name:", 1)[0]
-        self.assertIn("always() && !cancelled() && steps.review.outputs.review-completed == 'true'", step)
+        # Either this run's review, or an earlier run's handoff re-attested to this run.
+        # Both arms are an attested completion; neither publishes without one.
+        self.assertIn("always() && !cancelled() && (steps.review.outputs.review-completed == 'true'"
+                      " || steps.republish.outputs.completion-file != '')", step)
+        # A republish publishes the commit that was reviewed, not the PR's head now.
+        self.assertIn("HEAD_SHA: ${{ steps.republish.outputs.head-sha "
+                      "|| steps.prep.outputs.head-sha }}", step)
+        # The engine never runs on a republish, so no model key can be spent on one.
+        review = action.split("    - name: Review\n", 1)[1].split("    - name:", 1)[0]
+        self.assertIn("steps.prep.outputs.republish != 'true'", review)
         self.assertIn("GITHUB_TOKEN: ${{ inputs.github-token }}", step)
         review = action.split("    - name: Review\n", 1)[1].split("    - name:", 1)[0]
         self.assertNotIn("GITHUB_TOKEN: ${{ inputs.github-token }}", review)
         final = action.split("    - name: Complete check\n", 1)[1].split("    - name:", 1)[0]
         self.assertIn("PUBLISH_OUTCOME: ${{ steps.publish.outcome }}", final)
         self.assertIn("DELIVERY: ${{ steps.publish.outputs.delivery }}", final)
+
+    def test_no_handoff_leaves_a_public_repository(self):
+        action = (ROOT / "action.yml").read_text()
+        # result.json carries findings the review dropped, which are never posted. Until the
+        # engine emits a redacted handoff, that must not become a public artifact.
+        for name in ("Stage the handoff for a follow-up",
+                     "Post the rest without asking the author"):
+            with self.subTest(step=name):
+                step = action.split(f"    - name: {name}\n", 1)[1].split("    - name:", 1)[0]
+                self.assertIn("github.event.repository.private", step)
+
+    def test_a_follow_up_is_promised_only_while_one_can_still_run(self):
+        action = (ROOT / "action.yml").read_text()
+        publish = action.split("    - name: Publish review\n", 1)[1].split("    - name:", 1)[0]
+        # On the last attempt nothing further is dispatched, so the engine must not tell the
+        # author the rest arrives on its own.
+        self.assertIn("PUBLISH_FOLLOWUP: ${{ inputs.auto-republish == 'true' && "
+                      "github.event.repository.private && "
+                      "fromJSON(inputs.republish-attempt || '0') "
+                      "< fromJSON(inputs.max-republish-attempts) }}", publish)
+
+    def test_a_follow_up_is_dispatched_only_once_its_handoff_is_uploaded(self):
+        action = (ROOT / "action.yml").read_text()
+        upload = action.split("    - name: Upload the handoff for a follow-up\n", 1)[1]
+        self.assertIn("id: upload-handoff", upload.split("    - name:", 1)[0])
+        dispatch = action.split("    - name: Post the rest without asking the author\n", 1)[1]
+        # Without the artifact a follow-up can only spend a run and fail to download it.
+        self.assertIn("steps.upload-handoff.outcome == 'success'",
+                      dispatch.split("    - name:", 1)[0])
 
     def test_action_passes_model_keys_and_provider_only_to_review(self):
         action = (ROOT / "action.yml").read_text()

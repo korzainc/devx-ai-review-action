@@ -59,15 +59,18 @@ jobs:
     # Check the command and association before concurrency can cancel another run.
     if: >-
       !cancelled() &&
-      github.event_name == 'issue_comment' &&
-      github.event.issue.pull_request &&
-      contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-               github.event.comment.author_association)
+      ((github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body) &&
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                 github.event.comment.author_association)) ||
+       github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     concurrency:
-      group: ai-review-${{ github.event.issue.number }}
-      cancel-in-progress: true
+      group: ai-review-${{ github.event.issue.number || inputs.pr }}
+      # A new /review supersedes a running one. A follow-up never cancels a review: it waits,
+      # and posts whatever that review leaves unposted.
+      cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Pinned to the action commit that pins engine 0.1.2.

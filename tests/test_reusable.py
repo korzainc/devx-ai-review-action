@@ -83,6 +83,19 @@ class ReusableTests(unittest.TestCase):
                     "contains": lambda values, item: any(github_equal(v, item) for v in values),
                     "fromJSON": json.loads, "cancelled": lambda: False})
                 self.assertEqual(bool(admitted), expected)
+        # The action's own follow-up comes in as a dispatch, with no comment to authorize.
+        # Dispatching needs write access to the repository, and prepare.sh rejects a dispatch
+        # that names no source run. Every other event stays out.
+        for event, expected in (("workflow_dispatch", True), ("schedule", False),
+                                ("push", False), ("pull_request", False)):
+            with self.subTest(event=event):
+                github = SimpleNamespace(event_name=event, event=SimpleNamespace(
+                    issue=SimpleNamespace(pull_request=False),
+                    comment=SimpleNamespace(body="", author_association="NONE")))
+                admitted = github_expression(expression, {"github": github}, allowed_functions={
+                    "contains": lambda values, item: any(github_equal(v, item) for v in values),
+                    "fromJSON": json.loads, "cancelled": lambda: False})
+                self.assertEqual(bool(admitted), expected)
         # A replacement review must stop this job on cancellation re-evaluation.
         github = SimpleNamespace(event_name="issue_comment", event=SimpleNamespace(
             issue=SimpleNamespace(pull_request=True),
@@ -203,6 +216,32 @@ else: raise SystemExit(1)
         self.assertNotIn("secrets: inherit", source)
 
 
+    def test_the_reusable_workflow_cannot_auto_republish(self):
+        source = self.workflow()
+        # Dispatching a follow-up needs actions: write, and a called workflow cannot ask for
+        # more than its caller granted: every existing caller would fail at startup.
+        head = source.split("\njobs:", 1)[0]
+        self.assertNotIn("actions: write", head)
+        # Off at the action, not merely defaulted off: the input is still forwarded, so a
+        # caller passing "true" would otherwise turn it back on.
+        call = source.split("      - uses: $/\n", 1)[1]
+        self.assertIn('auto-republish: "false"', call)
+        self.assertNotIn("auto-republish: ${{ inputs.auto-republish }}", call)
+
+    def test_reusable_callers_are_not_asked_for_republish_setup(self):
+        # The reusable workflow never republishes, so its documented callers need no dispatch
+        # block, no actions: write and no republish inputs. The inputs would also fail at
+        # startup against a pinned commit that does not define them.
+        readme = (ROOT / "README.md").read_text()
+        quick_start = readme.split("```yaml\n", 1)[1].split("```", 1)[0]
+        example = (ROOT / "examples/ai-review-reusable.yml").read_text()
+        for name, text in (("README quick start", quick_start), ("example", example)):
+            with self.subTest(source=name):
+                self.assertIn("ai-review.yml@", text)
+                self.assertNotIn("workflow_dispatch", text)
+                self.assertNotIn("actions: write", text)
+                self.assertNotIn("republish-", text)
+
     def test_caller_overrides_keep_check_identity_and_job_deadline(self):
         source = self.workflow()
         self.assertIn("      check-name:\n", source)
@@ -211,7 +250,13 @@ else: raise SystemExit(1)
         self.assertIn("          check-name: ${{ inputs.check-name }}", source)
         self.assertIn("        default: 360", source)
         self.assertIn("      concurrency-prefix:\n", source)
-        self.assertIn("      group: ${{ inputs.concurrency-prefix }}-${{ github.event.issue.number }}", source)
+        # A follow-up has no issue number of its own, so it names the PR it was dispatched for
+        # and lands in the same group as that PR's reviews.
+        self.assertIn("      group: ${{ inputs.concurrency-prefix }}-"
+                      "${{ github.event.issue.number || inputs.republish-pr-number }}", source)
+        # ... but never cancels a running review: it waits and posts what that review leaves.
+        self.assertIn("      cancel-in-progress: "
+                      "${{ github.event_name != 'workflow_dispatch' }}", source)
 
     def test_hint_only_runs_for_ready_same_repository_prs(self):
         hint = self.workflow().split("  hint:\n", 1)[1].split("  review:\n", 1)[0]
