@@ -24,6 +24,9 @@ What it does:
 | `crash` | exits 2 with no result.json |
 | `sleep` | hangs well past REVIEW_TIMEOUT, to test cancellation and the timeout backstop |
 
+Add `sarif` to any scenario that writes findings (for example `blocking,sarif`)
+to also write `results.sarif`, for testing `upload-sarif: true`.
+
 Build and try locally:
 
 ```sh
