@@ -323,6 +323,19 @@ os.execve(sys.executable, [sys.executable, *sys.argv[1:]], dict(os.environ))
                 received = json.loads((self.root / "received.json").read_text())
                 self.assertEqual(received["findings"][0]["reviewer"], role)
 
+    def test_repo_rules_reviewer_findings_can_stage_and_publish(self):
+        # Engine 0.1.3 adds a repo-rules reviewer for a repo's own enforcements.
+        self.add_finding()
+        self.result["findings"][0].update(reviewer="repo-rules", category="repo-rules")
+        self.action["findings"][0].update(skill="repo-rules", rule_id="repo-rules/rule")
+        self.action["skills_run"] = ["bug-hunter", "repo-rules"]
+        self.receipt["posted_comments"] = 1
+        self.write_handoff()
+        published = self.run_publish()
+        self.assertEqual(published.returncode, 0, published.stdout + published.stderr)
+        received = json.loads((self.root / "received.json").read_text())
+        self.assertEqual(received["findings"][0]["reviewer"], "repo-rules")
+
     def test_unknown_roles_cannot_stage_metadata_or_findings(self):
         self.add_finding()
         for role in ("scanner-orchestrator", "security-reviewer", "unknown"):

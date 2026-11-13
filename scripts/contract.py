@@ -30,7 +30,7 @@ import sys
 MIB = 1024 * 1024
 REVIEWERS = {"spec-adherence", "code-reviewer", "standards-and-practices",
              "test-coverage", "performance-review", "bug-hunter",
-             "owasp-reviewer", "stride-modeler"}
+             "owasp-reviewer", "stride-modeler", "repo-rules"}
 SEVERITIES = {"critical", "high", "medium", "low", "info"}
 
 
