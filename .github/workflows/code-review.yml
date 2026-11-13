@@ -12,8 +12,8 @@ permissions:
 jobs:
   review:
     if: ${{ !cancelled() && (github.event_name == 'pull_request' || contains(fromJSON('["/review", "/review\n", "/review\r\n"]'), github.event.comment.body)) }}
-    # The commit that pins engine 0.1.2.
-    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@a9ee8cceabf487c168a1f769163a4805834fd5e9
+    # The commit that pins engine 0.1.3.
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@a5002185fbd2ebe6b357d79381915ca33ad19139
     with:
       fail-on-error: 'true'
       job-timeout-minutes: 25

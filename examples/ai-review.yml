@@ -73,8 +73,8 @@ jobs:
       cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Pinned to the action commit that pins engine 0.1.2.
-      - uses: korzainc/devx-ai-review-action@a9ee8cceabf487c168a1f769163a4805834fd5e9
+      # Pinned to the action commit that pins engine 0.1.3.
+      - uses: korzainc/devx-ai-review-action@a5002185fbd2ebe6b357d79381915ca33ad19139
         with:
           # Picked in this order: the repo's OpenAI key, its Anthropic key, then the org-level key.
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
