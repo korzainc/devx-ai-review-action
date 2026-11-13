@@ -1,5 +1,5 @@
 # Merge to the default branch so GitHub can receive /review comments.
-# Pinned to the action commit that pins engine 0.1.2.
+# Pinned to the action commit that pins engine 0.1.3.
 name: AI Code Review
 
 on:
@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   review:
-    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@a9ee8cceabf487c168a1f769163a4805834fd5e9
+    uses: korzainc/devx-ai-review-action/.github/workflows/ai-review.yml@a5002185fbd2ebe6b357d79381915ca33ad19139
     secrets:
       # Picked in this order: the repository's own OpenAI key, its own Anthropic key, then the
       # org-level OpenAI key (its own name, since a repo and an org secret can't be told apart).
